@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     refresh_token_ttl_seconds: int = 14 * 24 * 3600
     auth_rate_limit_attempts: int = 10
     auth_rate_limit_window_seconds: int = 60
+    max_upload_bytes: int = 25 * 1024 * 1024
+    download_url_ttl_seconds: int = 300
 
     @model_validator(mode="after")
     def enforce_deployment_secrets(self) -> Self:
