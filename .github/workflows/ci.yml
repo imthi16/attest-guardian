@@ -59,6 +59,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose config --quiet
+      - name: Start and verify local infrastructure
+        run: make infra-up
+      - name: Show healthy service status
+        run: docker compose ps
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
@@ -70,6 +74,9 @@ jobs:
           context: apps/web
           file: apps/web/Dockerfile
           push: false
+      - name: Stop local infrastructure
+        if: always()
+        run: make infra-down
 
   dependency-audit:
     name: Dependency audit
