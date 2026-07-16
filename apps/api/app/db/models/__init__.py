@@ -10,7 +10,7 @@ from app.db.models.enums import (
     MembershipRole,
     MessageRole,
 )
-from app.db.models.identity import Membership, User, Workspace
+from app.db.models.identity import Membership, RefreshToken, User, Workspace
 from app.db.models.operations import AuditLog, IngestionJob
 
 __all__ = [
@@ -30,6 +30,7 @@ __all__ = [
     "Message",
     "MessageRole",
     "Page",
+    "RefreshToken",
     "User",
     "VerificationResult",
     "Workspace",

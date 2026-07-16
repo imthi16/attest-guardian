@@ -1,9 +1,10 @@
-"""Users, workspaces, and workspace memberships."""
+"""Users, workspaces, workspace memberships, and refresh-token sessions."""
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint, text
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -27,6 +28,30 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class RefreshToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One refresh-token session; only a SHA-256 digest of the token is stored.
+
+    Rotation revokes the presented row and inserts a replacement, so a revoked
+    hash showing up again is evidence of token theft and voids every session.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="refresh_tokens")
 
 
 class Workspace(UUIDPrimaryKeyMixin, TimestampMixin, Base):

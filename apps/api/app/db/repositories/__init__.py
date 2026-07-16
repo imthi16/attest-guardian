@@ -5,6 +5,7 @@ from app.db.repositories.base import Repository, WorkspaceScopedRepository
 from app.db.repositories.documents import DocumentRepository
 from app.db.repositories.identity import (
     MembershipRepository,
+    RefreshTokenRepository,
     UserRepository,
     WorkspaceRepository,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "AuditLogRepository",
     "DocumentRepository",
     "MembershipRepository",
+    "RefreshTokenRepository",
     "Repository",
     "UserRepository",
     "WorkspaceRepository",
