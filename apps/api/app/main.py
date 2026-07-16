@@ -6,6 +6,7 @@ from app.api.v1.router import api_v1_router
 from app.auth.rate_limit import SlidingWindowRateLimiter
 from app.config import Settings, get_settings
 from app.routes.health import router as health_router
+from app.storage.s3 import S3ObjectStorage
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -24,6 +25,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         attempts=resolved_settings.auth_rate_limit_attempts,
         window_seconds=resolved_settings.auth_rate_limit_window_seconds,
     )
+    application.state.object_storage = S3ObjectStorage(resolved_settings)
     application.include_router(health_router)
     application.include_router(api_v1_router, prefix="/api/v1")
     return application

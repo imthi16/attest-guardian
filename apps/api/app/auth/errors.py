@@ -125,3 +125,32 @@ def slug_already_exists() -> HTTPException:
         "slug_already_exists",
         "A workspace with this slug already exists.",
     )
+
+
+def upload_rejected(code: str, message: str) -> HTTPException:
+    """Validation failures carry the stable code raised by the validator."""
+    return _error(status.HTTP_422_UNPROCESSABLE_ENTITY, code, message)
+
+
+def file_too_large(max_upload_bytes: int) -> HTTPException:
+    return _error(
+        status.HTTP_413_CONTENT_TOO_LARGE,
+        "file_too_large",
+        f"The file exceeds the {max_upload_bytes} byte upload limit.",
+    )
+
+
+def duplicate_document() -> HTTPException:
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "duplicate_document",
+        "A document with identical content already exists in this workspace.",
+    )
+
+
+def document_not_found() -> HTTPException:
+    return _error(
+        status.HTTP_404_NOT_FOUND,
+        "document_not_found",
+        "The document does not exist in this workspace.",
+    )
