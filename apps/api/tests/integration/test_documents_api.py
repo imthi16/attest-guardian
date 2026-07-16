@@ -6,6 +6,7 @@ storage, presigned downloads, authorization, and audit events. They require
 """
 
 import io
+import uuid
 import zipfile
 from collections.abc import AsyncIterator
 from typing import Any
@@ -26,7 +27,13 @@ DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 
 
 def storage_settings() -> Settings:
-    return Settings(auth_rate_limit_attempts=1000, s3_bucket=TEST_BUCKET)
+    prefix = f"test:api:{uuid.uuid4().hex}"
+    return Settings(
+        auth_rate_limit_attempts=1000,
+        s3_bucket=TEST_BUCKET,
+        ingestion_queue_key=f"{prefix}:queue",
+        ingestion_dead_letter_key=f"{prefix}:dead",
+    )
 
 
 def make_docx_bytes() -> bytes:
@@ -257,6 +264,49 @@ async def test_documents_are_invisible_across_workspaces(client: httpx.AsyncClie
         headers=other.headers,
     )
     assert listing.json() == []
+
+
+async def test_upload_enqueues_ingestion_and_reports_progress(
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> None:
+    from app.ingestion.queue import RedisJobQueue
+
+    settings = storage_settings()
+    async with build_client(db_session, settings) as client:
+        owner = await make_account(client, "owner@example.com")
+        workspace_id = await make_workspace(client, owner)
+        uploaded = await upload(client, owner, workspace_id)
+        document_id = uploaded.json()["id"]
+
+        progress = await client.get(
+            f"/api/v1/workspaces/{workspace_id}/documents/{document_id}/status",
+            headers=owner.headers,
+        )
+        assert progress.status_code == 200, progress.text
+        body = progress.json()
+        assert body["status"] == "pending"
+        assert body["job_status"] == "queued"
+        assert body["stage"] == "uploaded"
+        assert body["attempts"] == 0
+
+        queue = RedisJobQueue(
+            settings.redis_url,
+            queue_key=settings.ingestion_queue_key,
+            dead_letter_key=settings.ingestion_dead_letter_key,
+        )
+        try:
+            message = await queue.dequeue(0)
+            assert message is not None
+            assert str(message.workspace_id) == workspace_id
+        finally:
+            await queue.aclose()
+
+        missing = await client.get(
+            f"/api/v1/workspaces/{workspace_id}/documents/{uuid.uuid4()}/status",
+            headers=owner.headers,
+        )
+        assert missing.status_code == 404
 
 
 async def test_listing_and_detail_for_members(client: httpx.AsyncClient) -> None:
