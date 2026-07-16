@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from app.db.base import Base, UUIDPrimaryKeyMixin, WorkspaceOwnedModel
-from app.db.models.enums import IngestionStatus, pg_enum
+from app.db.models.enums import IngestionStage, IngestionStatus, pg_enum
 
 
 class AuditLog(UUIDPrimaryKeyMixin, Base):
@@ -58,6 +58,11 @@ class IngestionJob(WorkspaceOwnedModel):
     status: Mapped[IngestionStatus] = mapped_column(
         pg_enum(IngestionStatus, "ingestion_status"),
         default=IngestionStatus.QUEUED,
+    )
+    stage: Mapped[IngestionStage] = mapped_column(
+        pg_enum(IngestionStage, "ingestion_stage"),
+        default=IngestionStage.UPLOADED,
+        server_default=IngestionStage.UPLOADED.value,
     )
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     error: Mapped[str | None] = mapped_column(Text)

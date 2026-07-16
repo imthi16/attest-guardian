@@ -65,3 +65,23 @@ class IngestionStatus(enum.Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class IngestionStage(enum.Enum):
+    """The furthest pipeline stage an ingestion job has reached.
+
+    Parsing through indexing are placeholders until their dedicated
+    features land; the worker still walks every stage so the progression
+    is observable end to end.
+    """
+
+    UPLOADED = "uploaded"
+    VALIDATING = "validating"
+    SCANNING = "scanning"
+    PARSING = "parsing"
+    OCR = "ocr"
+    NORMALIZING = "normalizing"
+    CHUNKING = "chunking"
+    EMBEDDING = "embedding"
+    INDEXING = "indexing"
+    READY = "ready"
