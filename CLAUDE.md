@@ -97,7 +97,12 @@ Repository layout and intended ownership per directory:
   lives in `app/auth/` (Argon2id passwords, HS256 access JWTs, DB-backed rotating refresh tokens
   with reuse detection, sliding-window rate limiting) behind `/api/v1/auth`; protected routes take
   the `CurrentUserDep` dependency, per-app state (`app.state.settings`, `auth_rate_limiter`) is set
-  in `create_app`, and auth errors carry stable `{code, message}` details.
+  in `create_app`, and auth errors carry stable `{code, message}` details. Workspace RBAC:
+  routes under `/workspaces/{id}` resolve a `WorkspaceContext` (`app/auth/workspace.py`) that
+  proves membership (non-members get 404, never 403), applies the role matrix in
+  `app/auth/permissions.py`, and calls `bind_workspace` so Postgres row-level security
+  (migration `0003`, enforced only for non-superuser DB roles) fences tenant tables under the
+  repository scoping.
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
   (`--max-warnings=0`).
 - `services/` — planned boundaries for `ingestion`, `retrieval`, `verification`, `safety`, kept as

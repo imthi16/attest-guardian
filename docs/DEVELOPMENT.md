@@ -42,6 +42,23 @@ codes (`invalid_credentials`, `invalid_refresh_token`, `not_authenticated`,
 endpoints are rate limited per client IP and path with an in-process sliding window; the limiter
 sits behind an interface and must move to Redis before the API scales past one replica.
 
+## Workspaces and roles
+
+Workspaces are the tenant boundary. `/api/v1/workspaces` supports creating a workspace (the
+creator becomes its owner), listing your workspaces, and managing members. Roles are
+`owner`, `admin`, `member`, and `viewer` (read-only reviewer); the matrix lives in
+`app/auth/permissions.py`. Admins manage only `member`/`viewer` rosters — privileged roles are
+owner-only — and the last owner can never be demoted or removed. Non-members receive the same
+404 as a missing workspace so existence is not disclosed, and every membership mutation writes
+an audit event in the same transaction.
+
+Authorization is layered: routes resolve a `WorkspaceContext` (membership proof + role check),
+repositories scope tenant queries via `WorkspaceScopedRepository`, and PostgreSQL row-level
+security policies (`FORCE`, keyed on the transaction-local `app.workspace_id` set by
+`bind_workspace`) fence tenant tables underneath both. Superusers bypass RLS, so deployments
+must connect as a non-superuser role; the RLS integration tests verify the policies with a
+dedicated non-superuser probe role.
+
 ## Verification
 
 - `make format` formats Python and web sources.
