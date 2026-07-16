@@ -111,8 +111,12 @@ Repository layout and intended ownership per directory:
   (`make dev-worker`, `python -m app.ingestion.worker`) claims jobs by compare-and-set (duplicate
   delivery safe), walks stage enums committed per transition, retries transient failures, and
   dead-letters after `INGESTION_MAX_ATTEMPTS`; quarantine (EICAR placeholder scanner) and
-  integrity failures never retry. Worker tests use a dedicated committed DB
-  (`nambikkai_worker_test`), not the rolled-back `db_session`.
+  integrity failures never retry. Worker tests use dedicated committed DBs
+  (`nambikkai_worker_test`, `nambikkai_parsing_test`), not the rolled-back `db_session`.
+  Parsing (`app/parsing/`): pypdf → pdfium fallback, scanned-page heuristic (<24 chars),
+  `OcrEngine` protocol (`tesseract` adapter or `none` → `ocr_engine="unavailable"` provenance);
+  PDF test fixtures are generated in-memory via `tests/pdftools.py` (reportlab), never
+  committed binaries. Tesseract tests skip when the binary is absent (installed in CI).
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
   (`--max-warnings=0`).
 - `services/` — planned boundaries for `ingestion`, `retrieval`, `verification`, `safety`, kept as

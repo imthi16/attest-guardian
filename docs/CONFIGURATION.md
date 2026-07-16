@@ -24,6 +24,9 @@ The committed `.env.example` contains non-secret local defaults only.
 | `INGESTION_QUEUE_KEY`, `INGESTION_DEAD_LETTER_KEY` | Redis list keys for the job queue | `nambikkai:ingestion:*` |
 | `INGESTION_MAX_ATTEMPTS` | Attempts before a job dead-letters | `3` |
 | `INGESTION_STALE_AFTER_SECONDS` | Age before running/queued jobs are recovered | `300` |
+| `INGESTION_STORE_PAGE_IMAGES` | Store rendered PNGs of OCR'd pages | `true` |
+| `OCR_ENGINE` | `none` or `tesseract` | `none` |
+| `OCR_LANGUAGES` | Tesseract language codes | `tam+eng` |
 
 Known local secrets are rejected when `APP_ENV` is `staging` or `production`. Deployed secrets must
 come from a secret manager or protected environment configuration, never a checked-in file. Keep

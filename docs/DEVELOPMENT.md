@@ -86,6 +86,20 @@ quarantines on a hit without retrying. Parsing through indexing are placeholders
 (stale `queued`). Workers bind row-level security per job from the queue message; the
 cross-workspace recovery scan means a deployed worker role needs `BYPASSRLS`.
 
+## Parsing and OCR
+
+The parsing stage (`app/parsing/`) extracts page-level text: digital PDFs via `pypdf` with a
+`pypdfium2` fallback (malformed files that fail both parsers fail the job permanently), DOCX
+via `python-docx`, and TXT/Markdown as a single logical page. A page whose extracted text has
+fewer than ~24 non-whitespace characters is treated as scanned and routed to OCR. OCR engines
+sit behind the `OcrEngine` protocol, selected by `OCR_ENGINE`: `tesseract` (system binary with
+`tam`/`eng` models — install `tesseract-ocr tesseract-ocr-tam`) or `none`, which records
+`ocr_engine="unavailable"` provenance instead of inventing text. The planned PaddleOCR adapter
+implements the same protocol later. Each OCR'd page keeps engine name, mean confidence,
+word-level blocks with bounding boxes (`pages.ocr_blocks`), and a rendered PNG reference in
+object storage (`pages.image_storage_key`, disable with `INGESTION_STORE_PAGE_IMAGES=false`).
+Reprocessing replaces a version's pages atomically, so retries never duplicate rows.
+
 ## Verification
 
 - `make format` formats Python and web sources.
