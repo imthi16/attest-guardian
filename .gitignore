@@ -23,6 +23,6 @@ coverage-summary.json
 .vscode/
 *.log
 storage/
-models/
-artifacts/
+/models/
+/artifacts/
 .envrc
