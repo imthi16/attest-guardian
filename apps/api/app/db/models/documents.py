@@ -7,7 +7,7 @@ without joins; it must always equal the owning document's workspace.
 """
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     BigInteger,
@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceOwnedModel
@@ -105,6 +106,8 @@ class Page(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     language: Mapped[str | None] = mapped_column(String(35))
     ocr_engine: Mapped[str | None] = mapped_column(String(100))
     ocr_confidence: Mapped[float | None] = mapped_column(Float)
+    image_storage_key: Mapped[str | None] = mapped_column(String(1024))
+    ocr_blocks: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
     document_version: Mapped[DocumentVersion] = relationship(back_populates="pages")
 
