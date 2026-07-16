@@ -26,10 +26,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models.documents import Document, DocumentVersion
+from app.db.models.documents import Document, DocumentVersion, Page
 from app.db.models.enums import DocumentStatus, IngestionStage, IngestionStatus
 from app.db.models.operations import IngestionJob
 from app.db.repositories.audit import AuditLogRepository
@@ -37,15 +37,19 @@ from app.db.session import bind_workspace, session_scope
 from app.documents.validation import UploadRejectedError, detect_kind, verify_content
 from app.ingestion.queue import JobMessage, JobQueue
 from app.ingestion.scanner import MalwareScanner
+from app.parsing.ocr import NullOcrEngine, OcrEngine
+from app.parsing.pdf import parse_pdf, render_pdf_page_png
+from app.parsing.text import parse_docx, parse_text
+from app.parsing.types import ParsedDocument, ParserError
 from app.storage.base import ObjectStorage
 
 logger = logging.getLogger("app.ingestion")
 
-# Stages between scanning and ready are placeholders until their features
-# land (#7 parsing/OCR, #8 chunking, #9 normalization, #10 embeddings).
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+# Stages after OCR are placeholders until their features land
+# (#8 chunking, #9 normalization, #10 embeddings).
 _PLACEHOLDER_STAGES = (
-    IngestionStage.PARSING,
-    IngestionStage.OCR,
     IngestionStage.NORMALIZING,
     IngestionStage.CHUNKING,
     IngestionStage.EMBEDDING,
@@ -68,6 +72,9 @@ class PermanentIngestionError(Exception):
 @dataclass(frozen=True)
 class _LoadedContent:
     document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_number: int
+    mime_type: str
     data: bytes
 
 
@@ -81,6 +88,8 @@ class IngestionWorker:
         storage: ObjectStorage,
         queue: JobQueue,
         scanner: MalwareScanner,
+        ocr_engine: OcrEngine | None = None,
+        store_page_images: bool = True,
         max_attempts: int = 3,
         stale_after_seconds: int = 300,
     ) -> None:
@@ -88,6 +97,8 @@ class IngestionWorker:
         self._storage = storage
         self._queue = queue
         self._scanner = scanner
+        self._ocr_engine = ocr_engine or NullOcrEngine()
+        self._store_page_images = store_page_images
         self._max_attempts = max_attempts
         self._stale_after = timedelta(seconds=stale_after_seconds)
 
@@ -143,6 +154,8 @@ class IngestionWorker:
     async def _run_stages(self, message: JobMessage) -> None:
         content = await self._stage_validate(message)
         await self._stage_scan(message, content)
+        parsed = await self._stage_parse(message, content)
+        await self._stage_ocr(message, content, parsed)
         for stage in _PLACEHOLDER_STAGES:
             await self._advance_stage(message, stage)
             logger.info(
@@ -183,7 +196,13 @@ class IngestionWorker:
             storage_key = version.storage_key
             expected_sha256 = version.sha256
             filename = document.source_filename
-            document_id = document.id
+            loaded = _LoadedContent(
+                document_id=document.id,
+                version_id=version.id,
+                version_number=version.version_number,
+                mime_type=document.mime_type,
+                data=b"",
+            )
 
         data = await self._storage.get_object(storage_key)
         if hashlib.sha256(data).hexdigest() != expected_sha256:
@@ -193,13 +212,107 @@ class IngestionWorker:
             verify_content(detect_kind(filename), data)
         except UploadRejectedError as rejection:
             raise PermanentIngestionError(rejection.message) from rejection
-        return _LoadedContent(document_id=document_id, data=data)
+        return _LoadedContent(
+            document_id=loaded.document_id,
+            version_id=loaded.version_id,
+            version_number=loaded.version_number,
+            mime_type=loaded.mime_type,
+            data=data,
+        )
 
     async def _stage_scan(self, message: JobMessage, content: _LoadedContent) -> None:
         await self._advance_stage(message, IngestionStage.SCANNING)
         verdict = await self._scanner.scan(content.data)
         if not verdict.clean:
             raise QuarantinedError(verdict.reason or "malware detected")
+
+    async def _stage_parse(self, message: JobMessage, content: _LoadedContent) -> ParsedDocument:
+        await self._advance_stage(message, IngestionStage.PARSING)
+        try:
+            if content.mime_type == "application/pdf":
+                parsed = parse_pdf(content.data)
+            elif content.mime_type == _DOCX_MIME:
+                parsed = parse_docx(content.data)
+            else:
+                parsed = parse_text(content.data)
+        except ParserError as error:
+            raise PermanentIngestionError(str(error)) from error
+        logger.info(
+            "parsed document",
+            extra={
+                "job_id": str(message.job_id),
+                "parser": parsed.parser,
+                "pages": len(parsed.pages),
+                "scanned_pages": sum(1 for page in parsed.pages if page.needs_ocr),
+            },
+        )
+        return parsed
+
+    async def _stage_ocr(
+        self,
+        message: JobMessage,
+        content: _LoadedContent,
+        parsed: ParsedDocument,
+    ) -> None:
+        await self._advance_stage(message, IngestionStage.OCR)
+        for page in parsed.pages:
+            if not page.needs_ocr:
+                continue
+            image_png = render_pdf_page_png(content.data, page.page_number)
+            if self._store_page_images:
+                image_key = (
+                    f"workspaces/{message.workspace_id}/documents/{content.document_id}"
+                    f"/pages/v{content.version_number}/p{page.page_number}.png"
+                )
+                await self._storage.put_object(image_key, image_png, "image/png")
+                page.image_storage_key = image_key
+            result = await self._ocr_engine.recognize(image_png)
+            page.text = result.text
+            page.ocr_engine = self._ocr_engine.name
+            page.ocr_confidence = result.confidence
+            page.ocr_blocks = result.blocks or None
+            logger.info(
+                "page ocr complete",
+                extra={
+                    "job_id": str(message.job_id),
+                    "page": page.page_number,
+                    "engine": self._ocr_engine.name,
+                    "confidence": result.confidence,
+                },
+            )
+        await self._persist_pages(message, content, parsed)
+
+    async def _persist_pages(
+        self,
+        message: JobMessage,
+        content: _LoadedContent,
+        parsed: ParsedDocument,
+    ) -> None:
+        """Replace the version's pages atomically; reprocessing never duplicates."""
+        async with session_scope(self._factory) as session:
+            await bind_workspace(session, message.workspace_id)
+            await session.execute(
+                delete(Page).where(Page.document_version_id == content.version_id)
+            )
+            for page in parsed.pages:
+                session.add(
+                    Page(
+                        document_version_id=content.version_id,
+                        page_number=page.page_number,
+                        text=page.text,
+                        ocr_engine=page.ocr_engine,
+                        ocr_confidence=page.ocr_confidence,
+                        image_storage_key=page.image_storage_key,
+                        ocr_blocks=(
+                            [block.as_provenance() for block in page.ocr_blocks]
+                            if page.ocr_blocks
+                            else None
+                        ),
+                    )
+                )
+            version = await session.get(DocumentVersion, content.version_id)
+            if version is not None:
+                version.page_count = len(parsed.pages)
 
     async def _finish(self, message: JobMessage) -> None:
         async with session_scope(self._factory) as session:
@@ -329,6 +442,7 @@ def _main() -> None:
     from app.db.session import get_session_factory
     from app.ingestion.queue import RedisJobQueue
     from app.ingestion.scanner import SignatureScanner
+    from app.parsing.ocr import build_ocr_engine
     from app.storage.s3 import S3ObjectStorage
 
     logging.basicConfig(level=logging.INFO)
@@ -342,6 +456,8 @@ def _main() -> None:
             dead_letter_key=settings.ingestion_dead_letter_key,
         ),
         scanner=SignatureScanner(),
+        ocr_engine=build_ocr_engine(settings.ocr_engine, settings.ocr_languages),
+        store_page_images=settings.ingestion_store_page_images,
         max_attempts=settings.ingestion_max_attempts,
         stale_after_seconds=settings.ingestion_stale_after_seconds,
     )
