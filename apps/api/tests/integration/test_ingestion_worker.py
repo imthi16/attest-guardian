@@ -31,10 +31,11 @@ from sqlalchemy.pool import NullPool
 
 from tests.integration import factories
 from tests.integration.dbtools import alembic, provision_database
+from tests.pdftools import digital_pdf
 
 WORKER_DB = "nambikkai_worker_test"
 TEST_BUCKET = "nambikkai-test-documents"
-PDF_BYTES = b"%PDF-1.7\nworker pipeline body\n%%EOF\n"
+PDF_BYTES = digital_pdf("Worker pipeline body with plenty of digital text on one page.")
 
 
 @pytest.fixture(scope="module")
