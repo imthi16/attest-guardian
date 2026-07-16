@@ -1,4 +1,4 @@
-"""The initial migration must upgrade, match the models, and downgrade cleanly."""
+"""The migration chain must upgrade, match the models, and downgrade cleanly."""
 
 import asyncio
 
@@ -14,8 +14,8 @@ def test_migrations_upgrade_check_downgrade_and_reupgrade() -> None:
 
     upgrade = alembic(["upgrade", "head"], url)
     assert upgrade.returncode == 0, upgrade.stderr
-    # 13 model tables + alembic_version
-    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 14
+    # 14 model tables + alembic_version
+    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 15
     assert asyncio.run(scalar(url, VECTOR_EXTENSION_SQL)) == 1
 
     # The migration must exactly express the current models: autogenerate
@@ -30,4 +30,4 @@ def test_migrations_upgrade_check_downgrade_and_reupgrade() -> None:
 
     reupgrade = alembic(["upgrade", "head"], url)
     assert reupgrade.returncode == 0, reupgrade.stderr
-    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 14
+    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 15

@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "memberships",
     "messages",
     "pages",
+    "refresh_tokens",
     "users",
     "verification_results",
     "workspaces",
