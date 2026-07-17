@@ -100,6 +100,20 @@ word-level blocks with bounding boxes (`pages.ocr_blocks`), and a rendered PNG r
 object storage (`pages.image_storage_key`, disable with `INGESTION_STORE_PAGE_IMAGES=false`).
 Reprocessing replaces a version's pages atomically, so retries never duplicate rows.
 
+## Chunking and provenance
+
+The chunking stage (`app/chunking/`) turns pages into retrievable evidence spans. The cardinal
+rule: a chunk's content is always the exact substring `page_text[char_start:char_end]` — the
+chunker computes boundaries, it never rewrites text — which makes provenance mechanically
+verifiable. Markdown and numbered headings build a section hierarchy (carried across page
+breaks); paragraphs pack greedily up to `CHUNK_MAX_CHARS` with `CHUNK_OVERLAP_CHARS` of shared
+context between neighbors; pipe tables stay atomic whatever their size; chunks never span
+pages. Each chunk records page number, character offsets, section path, an approximate
+whitespace token count, language, and OCR engine/confidence inherited from its page. Before
+persistence every chunk passes `validate_chunk_provenance`, which re-derives the span
+equality, SHA-256 content hash, and token count — a failure aborts the job rather than
+persisting an untraceable chunk, and reprocessing replaces a version's chunks atomically.
+
 ## Verification
 
 - `make format` formats Python and web sources.

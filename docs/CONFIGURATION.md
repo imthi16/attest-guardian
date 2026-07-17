@@ -27,6 +27,8 @@ The committed `.env.example` contains non-secret local defaults only.
 | `INGESTION_STORE_PAGE_IMAGES` | Store rendered PNGs of OCR'd pages | `true` |
 | `OCR_ENGINE` | `none` or `tesseract` | `none` |
 | `OCR_LANGUAGES` | Tesseract language codes | `tam+eng` |
+| `CHUNK_MAX_CHARS` | Maximum characters per chunk | `1200` |
+| `CHUNK_OVERLAP_CHARS` | Context shared between neighboring chunks | `150` |
 
 Known local secrets are rejected when `APP_ENV` is `staging` or `production`. Deployed secrets must
 come from a secret manager or protected environment configuration, never a checked-in file. Keep

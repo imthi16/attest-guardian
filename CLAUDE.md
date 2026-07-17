@@ -117,6 +117,10 @@ Repository layout and intended ownership per directory:
   `OcrEngine` protocol (`tesseract` adapter or `none` → `ocr_engine="unavailable"` provenance);
   PDF test fixtures are generated in-memory via `tests/pdftools.py` (reportlab), never
   committed binaries. Tesseract tests skip when the binary is absent (installed in CI).
+  Chunking (`app/chunking/`): chunk content must equal `page_text[char_start:char_end]`
+  exactly (the chunker computes boundaries, never rewrites text) and
+  `validate_chunk_provenance` gates persistence — a provenance failure aborts the job.
+  Tables are atomic, chunks never span pages, and the section hierarchy carries across pages.
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
   (`--max-warnings=0`).
 - `services/` — planned boundaries for `ingestion`, `retrieval`, `verification`, `safety`, kept as
