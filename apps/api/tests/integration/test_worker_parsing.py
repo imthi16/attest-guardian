@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import pytest
 from app.config import Settings
-from app.db.models.documents import Document, DocumentVersion, Page
+from app.db.models.documents import Chunk, Document, DocumentVersion, Page
 from app.db.models.enums import DocumentStatus, IngestionStatus
 from app.db.models.operations import IngestionJob
 from app.ingestion.queue import JobMessage, RedisJobQueue
@@ -316,6 +316,57 @@ async def test_tamil_text_document_becomes_a_page(
     assert pages[0].text == TAMIL_TEXT
 
 
+async def chunks_for(
+    factory: async_sessionmaker[AsyncSession],
+    version_id: uuid.UUID,
+) -> list[Chunk]:
+    async with factory() as session:
+        return list(
+            (
+                await session.scalars(
+                    select(Chunk)
+                    .where(Chunk.document_version_id == version_id)
+                    .order_by(Chunk.chunk_index)
+                )
+            ).all()
+        )
+
+
+async def test_chunks_are_persisted_with_verified_provenance(
+    factory: async_sessionmaker[AsyncSession],
+    storage: S3ObjectStorage,
+    queue: RedisJobQueue,
+) -> None:
+    markdown = (
+        "# அறிமுகம்\n\n"
+        f"{TAMIL_TEXT}\n\n"
+        "## Details\n\nAn English paragraph with enough words to count tokens."
+    )
+    seeded = await seed(
+        factory,
+        storage,
+        content=markdown.encode(),
+        filename="notes.md",
+        mime_type="text/markdown",
+    )
+    await queue.enqueue(seeded.message)
+    await build_worker(factory, storage, queue).process_next(0)
+
+    pages = await pages_for(factory, seeded.version_id)
+    chunks = await chunks_for(factory, seeded.version_id)
+    assert chunks, "chunks must be persisted"
+    page_text = pages[0].text or ""
+    for index, chunk in enumerate(chunks):
+        assert chunk.chunk_index == index
+        assert chunk.workspace_id == seeded.message.workspace_id
+        assert chunk.page_number == 1
+        assert chunk.token_count > 0
+        assert page_text[chunk.char_start : chunk.char_end] == chunk.content
+        assert hashlib.sha256(chunk.content.encode()).hexdigest() == chunk.content_hash
+    assert chunks[0].section == "அறிமுகம்"
+    assert any(chunk.section == "அறிமுகம் > Details" for chunk in chunks)
+
+
 async def test_reprocessing_replaces_pages_without_duplicates(
     factory: async_sessionmaker[AsyncSession],
     storage: S3ObjectStorage,
@@ -345,3 +396,5 @@ async def test_reprocessing_replaces_pages_without_duplicates(
 
     pages = await pages_for(factory, seeded.version_id)
     assert len(pages) == 1
+    chunks = await chunks_for(factory, seeded.version_id)
+    assert len(chunks) == 1  # replaced, not duplicated
