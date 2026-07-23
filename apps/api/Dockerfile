@@ -4,9 +4,12 @@ FROM python:3.12-slim AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 WORKDIR /build
+# Optional dependency extras to install into the image, e.g. "[paddle]" for a
+# PaddleOCR-enabled worker. Empty by default so the base image stays slim.
+ARG PIP_EXTRAS=""
 COPY pyproject.toml README.md ./
 COPY app ./app
-RUN python -m pip install --prefix=/install .
+RUN python -m pip install --prefix=/install ".${PIP_EXTRAS}"
 
 FROM python:3.12-slim AS runtime
 

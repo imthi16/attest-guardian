@@ -25,8 +25,8 @@ The committed `.env.example` contains non-secret local defaults only.
 | `INGESTION_MAX_ATTEMPTS` | Attempts before a job dead-letters | `3` |
 | `INGESTION_STALE_AFTER_SECONDS` | Age before running/queued jobs are recovered | `300` |
 | `INGESTION_STORE_PAGE_IMAGES` | Store rendered PNGs of OCR'd pages | `true` |
-| `OCR_ENGINE` | `none` or `tesseract` | `none` |
-| `OCR_LANGUAGES` | Tesseract language codes | `tam+eng` |
+| `OCR_ENGINE` | `none`, `tesseract`, or `paddle` | `none` |
+| `OCR_LANGUAGES` | OCR language codes (`tam+eng`); `paddle` uses the first recognised code | `tam+eng` |
 | `CHUNK_MAX_CHARS` | Maximum characters per chunk | `1200` |
 | `CHUNK_OVERLAP_CHARS` | Context shared between neighboring chunks | `150` |
 | `EMBEDDING_PROVIDER` | Embedding backend (`local`) | `local` |
@@ -38,6 +38,19 @@ The committed `.env.example` contains non-secret local defaults only.
 Known local secrets are rejected when `APP_ENV` is `staging` or `production`. Deployed secrets must
 come from a secret manager or protected environment configuration, never a checked-in file. Keep
 API docs disabled in deployments where public schema discovery is not intended.
+
+## OCR engines
+
+`OCR_ENGINE=tesseract` requires the system `tesseract` binary with the `tam` and `eng` language
+models. `OCR_ENGINE=paddle` requires the optional Paddle dependencies, which are not in the base
+image because they are large native wheels. To run the PaddleOCR engine, install the extra:
+
+- Local: `pip install -e 'apps/api[paddle]'`
+- Container: build with the `PIP_EXTRAS` build arg, for example
+  `docker build --build-arg PIP_EXTRAS='[paddle]' apps/api`.
+
+Selecting an engine whose dependency is absent fails fast at recognition time, so match `OCR_ENGINE`
+to the image the worker actually runs.
 
 Provider variables are placeholders until their dedicated features land. Empty `LLM_API_KEY`
 means no cloud provider is enabled; do not insert fake credentials.
