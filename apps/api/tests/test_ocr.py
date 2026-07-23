@@ -98,6 +98,24 @@ async def test_paddle_skips_malformed_lines_untrusted_output() -> None:
     assert len(result.blocks) == 1
 
 
+@pytest.mark.parametrize("bad_score", [1.5, -0.1, float("inf"), float("nan")])
+async def test_paddle_drops_out_of_range_confidence(bad_score: float) -> None:
+    raw = [
+        [
+            [[[0, 0], [9, 0], [9, 9], [0, 9]], ("bogus", bad_score)],
+            [[[5, 5], [15, 5], [15, 25], [5, 25]], ("keep", 0.8)],
+        ]
+    ]
+    engine = PaddleOcrEngine("eng", reader=FakeReader(raw))
+    result = await engine.recognize(_tiny_png())
+
+    # The untrusted out-of-range line is dropped so it cannot violate the
+    # persisted ocr_confidence range constraint (0 <= c <= 1).
+    assert result.text == "keep"
+    assert [block.text for block in result.blocks] == ["keep"]
+    assert result.confidence == pytest.approx(0.8)
+
+
 def _tiny_png() -> bytes:
     from PIL import Image
 

@@ -10,6 +10,7 @@ marker) where no engine is installed.
 """
 
 import asyncio
+import math
 from typing import Any, Protocol
 
 from app.parsing.types import OcrBlock, OcrResult
@@ -177,7 +178,10 @@ class PaddleOcrEngine:
                 score = float(recognition[1])
             except (TypeError, ValueError, IndexError):
                 continue
-            if not text:
+            # OCR output is untrusted: a score that is not a finite value in
+            # [0, 1] would violate the persisted confidence constraint, so the
+            # whole line is dropped rather than propagated.
+            if not text or not math.isfinite(score) or not 0.0 <= score <= 1.0:
                 continue
             blocks.append(OcrBlock(text=text, confidence=score, bbox=_bbox_from_polygon(polygon)))
             confidences.append(score)

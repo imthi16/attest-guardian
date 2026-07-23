@@ -39,5 +39,18 @@ Known local secrets are rejected when `APP_ENV` is `staging` or `production`. De
 come from a secret manager or protected environment configuration, never a checked-in file. Keep
 API docs disabled in deployments where public schema discovery is not intended.
 
+## OCR engines
+
+`OCR_ENGINE=tesseract` requires the system `tesseract` binary with the `tam` and `eng` language
+models. `OCR_ENGINE=paddle` requires the optional Paddle dependencies, which are not in the base
+image because they are large native wheels. To run the PaddleOCR engine, install the extra:
+
+- Local: `pip install -e 'apps/api[paddle]'`
+- Container: build with the `PIP_EXTRAS` build arg, for example
+  `docker build --build-arg PIP_EXTRAS='[paddle]' apps/api`.
+
+Selecting an engine whose dependency is absent fails fast at recognition time, so match `OCR_ENGINE`
+to the image the worker actually runs.
+
 Provider variables are placeholders until their dedicated features land. Empty `LLM_API_KEY`
 means no cloud provider is enabled; do not insert fake credentials.
