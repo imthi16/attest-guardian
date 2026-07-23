@@ -1,10 +1,10 @@
-# NambikkAI Guardian
+# Attest Guardian
 
 A secure multilingual document-intelligence platform for **Tamil, Tanglish, and English**. It is designed to answer from evidence, attach precise citations, verify claims, detect prompt-injection attempts, and abstain when the available evidence is insufficient.
 
 ## Product goal
 
-Most document-chat applications optimize for fluent answers. NambikkAI Guardian optimizes for **trust**:
+Most document-chat applications optimize for fluent answers. Attest Guardian optimizes for **trust**:
 
 - every answer is grounded in authorized documents;
 - every material claim links to supporting evidence;

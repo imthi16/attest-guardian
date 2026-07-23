@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "NambikkAI Guardian",
+  title: "Attest Guardian",
   description: "Evidence-first Tamil, Tanglish, and English document intelligence.",
 };
 

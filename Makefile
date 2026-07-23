@@ -7,10 +7,10 @@ WEB_DIR := apps/web
 API_VENV := $(API_DIR)/.venv
 API_BIN := $(API_VENV)/bin
 
-.PHONY: help install install-api install-web hooks dev-api dev-web format format-check lint typecheck test build audit check infra-up infra-down infra-logs compose-config compose-build clean
+.PHONY: help install install-api install-web hooks dev-api dev-web format format-check lint typecheck test build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
 
 help: ## Show available development commands.
-	@awk 'BEGIN {FS = ":.*## "; printf "NambikkAI Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "; printf "Attest Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install: install-api install-web ## Install all local development dependencies.
 
@@ -27,6 +27,9 @@ hooks: ## Install the repository pre-commit hooks.
 
 dev-api: ## Run the FastAPI development server on port 8000.
 	$(API_BIN)/uvicorn app.main:app --app-dir $(API_DIR) --reload --host 127.0.0.1 --port 8000
+
+dev-worker: ## Run the document-ingestion worker.
+	cd $(API_DIR) && $(API_BIN)/python -m app.ingestion.worker
 
 dev-web: ## Run the Next.js development server on port 3000.
 	npm --prefix $(WEB_DIR) run dev
@@ -76,6 +79,15 @@ compose-config: ## Validate the resolved Docker Compose configuration.
 
 compose-build: ## Build production API and web container images.
 	docker compose --profile application build api web
+
+migrate-up: ## Apply database migrations up to head.
+	$(API_BIN)/alembic -c infra/migrations/alembic.ini upgrade head
+
+migrate-down: ## Revert the most recent database migration.
+	$(API_BIN)/alembic -c infra/migrations/alembic.ini downgrade -1
+
+migrate-new: ## Autogenerate a migration; usage: make migrate-new m="describe change".
+	$(API_BIN)/alembic -c infra/migrations/alembic.ini revision --autogenerate -m "$(m)"
 
 clean: ## Remove generated local build and coverage output.
 	rm -rf $(API_DIR)/.coverage $(API_DIR)/htmlcov $(WEB_DIR)/.next $(WEB_DIR)/coverage

@@ -1,4 +1,4 @@
-# NambikkAI Guardian — Agent Instructions
+# Attest Guardian — Agent Instructions
 
 ## Mission
 

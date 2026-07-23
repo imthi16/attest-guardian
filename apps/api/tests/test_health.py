@@ -16,6 +16,6 @@ async def test_health(path: str) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "service": "nambikkai-api",
+        "service": "attest-api",
         "version": "0.1.0",
     }

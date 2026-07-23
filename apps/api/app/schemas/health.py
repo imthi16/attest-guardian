@@ -11,5 +11,5 @@ class HealthResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: Literal["ok"]
-    service: Literal["nambikkai-api"]
+    service: Literal["attest-api"]
     version: str

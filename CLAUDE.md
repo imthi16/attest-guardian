@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-NambikkAI Guardian is a secure multilingual document-intelligence platform for Tamil, Tanglish, and
+Attest Guardian is a secure multilingual document-intelligence platform for Tamil, Tanglish, and
 English. It answers only from evidence, attaches precise citations, verifies claims, detects
 prompt-injection attempts, and abstains when evidence is insufficient. The full mission and
 non-negotiable engineering rules live in [`AGENTS.md`](./AGENTS.md) — read it before making changes;
@@ -31,6 +31,10 @@ make infra-logs            # follow postgres/redis/minio logs
 
 make dev-api               # uvicorn --reload on 127.0.0.1:8000 (health: /health, /api/v1/health)
 make dev-web               # next dev on 127.0.0.1:3000
+
+make migrate-up            # alembic upgrade head (infra/migrations)
+make migrate-down          # revert latest migration
+make migrate-new m="..."   # autogenerate a revision against the running DB
 
 make format                # ruff format + ruff check --fix (api), prettier (web)
 make format-check          # same, check-only
@@ -83,7 +87,40 @@ Repository layout and intended ownership per directory:
   `app/routes/`. Settings (`app/config.py`) load from process env or the root `.env`, located by
   walking up from the module path to find `AGENTS.md` — do not assume a fixed relative path to the
   env file. `Settings.enforce_deployment_secrets` rejects the checked-in default `JWT_SECRET` /
-  `S3_SECRET_KEY` when `APP_ENV` is `staging` or `production`.
+  `S3_SECRET_KEY` when `APP_ENV` is `staging` or `production`. The database layer lives in
+  `app/db/`: SQLAlchemy 2.0 typed models (`models/`), async engine/session + `session_scope()`
+  (`session.py`), and repositories (`repositories/`) — tenant-owned data must go through
+  `WorkspaceScopedRepository`, which filters every query by `workspace_id`. Schema changes require
+  an Alembic revision in `infra/migrations/versions/`; the integration test suite runs
+  `alembic check` so models and migrations may not drift. API integration tests need the
+  `make infra-up` Postgres (they provision disposable `attest_test` databases). Authentication
+  lives in `app/auth/` (Argon2id passwords, HS256 access JWTs, DB-backed rotating refresh tokens
+  with reuse detection, sliding-window rate limiting) behind `/api/v1/auth`; protected routes take
+  the `CurrentUserDep` dependency, per-app state (`app.state.settings`, `auth_rate_limiter`) is set
+  in `create_app`, and auth errors carry stable `{code, message}` details. Workspace RBAC:
+  routes under `/workspaces/{id}` resolve a `WorkspaceContext` (`app/auth/workspace.py`) that
+  proves membership (non-members get 404, never 403), applies the role matrix in
+  `app/auth/permissions.py`, and calls `bind_workspace` so Postgres row-level security
+  (migration `0003`, enforced only for non-superuser DB roles) fences tenant tables under the
+  repository scoping. Document uploads (`app/documents/`, `app/routes/documents.py`) validate
+  filename/extension/declared-MIME/content-magic before any byte reaches storage, dedupe by
+  SHA-256 per workspace, and store via the `ObjectStorage` interface (`app/storage/`,
+  S3/MinIO impl); downloads are presigned URLs. Storage integration tests need the
+  `make infra-up` MinIO and use a separate `attest-test-documents` bucket. Ingestion
+  (`app/ingestion/`): uploads enqueue `{job_id, workspace_id}` on a Redis list; the worker
+  (`make dev-worker`, `python -m app.ingestion.worker`) claims jobs by compare-and-set (duplicate
+  delivery safe), walks stage enums committed per transition, retries transient failures, and
+  dead-letters after `INGESTION_MAX_ATTEMPTS`; quarantine (EICAR placeholder scanner) and
+  integrity failures never retry. Worker tests use dedicated committed DBs
+  (`attest_worker_test`, `attest_parsing_test`), not the rolled-back `db_session`.
+  Parsing (`app/parsing/`): pypdf → pdfium fallback, scanned-page heuristic (<24 chars),
+  `OcrEngine` protocol (`tesseract` adapter or `none` → `ocr_engine="unavailable"` provenance);
+  PDF test fixtures are generated in-memory via `tests/pdftools.py` (reportlab), never
+  committed binaries. Tesseract tests skip when the binary is absent (installed in CI).
+  Chunking (`app/chunking/`): chunk content must equal `page_text[char_start:char_end]`
+  exactly (the chunker computes boundaries, never rewrites text) and
+  `validate_chunk_provenance` gates persistence — a provenance failure aborts the job.
+  Tables are atomic, chunks never span pages, and the section hierarchy carries across pages.
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
   (`--max-warnings=0`).
 - `services/` — planned boundaries for `ingestion`, `retrieval`, `verification`, `safety`, kept as

@@ -19,7 +19,7 @@ export default function HomePage() {
   return (
     <main id="main-content">
       <section className="hero" aria-labelledby="hero-title">
-        <p className="eyebrow">NAMBIKKAI GUARDIAN</p>
+        <p className="eyebrow">ATTEST GUARDIAN</p>
         <h1 id="hero-title">Document intelligence that proves its answers.</h1>
         <p className="hero-copy">
           A secure foundation for evidence-grounded answers across Tamil, Tanglish, and English
