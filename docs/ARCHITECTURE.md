@@ -122,3 +122,31 @@ verification depend on. Every retrieval emits a structured `RetrievalTrace`
 carries no query text, chunk content, or secrets, so it is safe to log and
 return. The endpoint `POST /workspaces/{id}/retrieval/search` requires the
 `QUERY` capability and clamps caller-supplied `top_k` to a configured maximum.
+
+## Multilingual reranking
+
+`app.reranking` refines the fused candidate order with a cross-encoder-style
+reranker behind the `Reranker` protocol, so the local MVP reranker can be
+replaced by a hosted `bge-reranker-v2-m3` without touching retrieval. A
+reranker scores how well each passage answers the query; `RerankService` then
+min-max normalizes those raw scores into `[0, 1]` (so a threshold is
+meaningful across models), drops candidates below `RERANK_THRESHOLD`, and
+reorders by normalized score with ties broken by chunk id.
+
+The MVP ships `LocalLexicalReranker`: a deterministic, dependency-free reranker
+that scores query/passage relevance by blended coverage and Jaccard over
+`app.language`-normalized unigrams and character trigrams, so Tamil, English,
+and Tanglish are handled with no language-specific tables. It is a lexical
+stand-in, not a semantic cross-encoder, so it is used for wiring and tests, not
+quality measurement; a labelled multilingual evaluation asserts a minimum
+top-1 accuracy and MRR to catch regressions.
+
+Reranking is a stage inside `HybridRetrievalService`: when enabled, fusion
+keeps a larger candidate pool (`RERANK_CANDIDATE_LIMIT`) so the reranker can
+promote a chunk fusion ranked just outside `top_k`, then the reranked list is
+truncated. The reranker only ever sees chunk text that was already authorized
+and hydrated, so it can reorder or drop candidates but never widen the result
+set or cross a tenant boundary. Failure is safe by construction: if the
+reranker raises, the service preserves the fused order (flagged in telemetry)
+rather than dropping authorized evidence. The retrieval trace records the
+reranker model, latency, and dropped count, never passage text or the query.

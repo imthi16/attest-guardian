@@ -38,6 +38,9 @@ The committed `.env.example` contains non-secret local defaults only.
 | `RETRIEVAL_CANDIDATE_LIMIT` | Max candidates fetched per retriever before fusion | `50` |
 | `RETRIEVAL_TOP_K` | Default number of fused results returned | `10` |
 | `RETRIEVAL_MAX_TOP_K` | Upper bound a request's `top_k` is clamped to | `50` |
+| `RERANK_ENABLED` | Rerank fused candidates before returning | `true` |
+| `RERANK_THRESHOLD` | Minimum normalized rerank score (0-1) to keep a candidate | `0.0` |
+| `RERANK_CANDIDATE_LIMIT` | Fused candidates fed to the reranker before truncation | `30` |
 
 Known local secrets are rejected when `APP_ENV` is `staging` or `production`. Deployed secrets must
 come from a secret manager or protected environment configuration, never a checked-in file. Keep

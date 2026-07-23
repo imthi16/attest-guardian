@@ -35,6 +35,8 @@ class RetrievedChunkResponse(BaseModel):
     language: str | None
     ocr_engine: str | None
     ocr_confidence: float | None
+    rerank_score: float | None
+    rerank_rank: int | None
 
 
 class RetrievalResponse(BaseModel):
@@ -62,6 +64,8 @@ class RetrievalResponse(BaseModel):
                     language=chunk.language,
                     ocr_engine=chunk.ocr_engine,
                     ocr_confidence=chunk.ocr_confidence,
+                    rerank_score=chunk.rerank_score,
+                    rerank_rank=chunk.rerank_rank,
                 )
                 for chunk in result.chunks
             ],

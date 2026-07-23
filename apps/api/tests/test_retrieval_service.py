@@ -138,7 +138,7 @@ async def test_service_fuses_both_sources_and_orders_results(
     service = HybridRetrievalService(
         session=object(),  # type: ignore[arg-type]
         embedding_service=FakeEmbeddingService(),  # type: ignore[arg-type]
-        config=RetrievalConfig(rrf_k=60, candidate_limit=50, top_k=10),
+        config=RetrievalConfig(rrf_k=60, candidate_limit=50, top_k=10, rerank_enabled=False),
     )
     result = await service.search(workspace_id=WORKSPACE, query="evidence please")
 
@@ -193,3 +193,80 @@ async def test_trace_metadata_carries_no_query_text_or_content(
     assert "secret sensitive query" not in serialized
     assert "detected_language" in metadata
     assert metadata["returned_count"] == 0
+
+
+class ReverseReranker:
+    """Scores by reverse chunk-id so we can prove reranking changed the order."""
+
+    model = "reverse-reranker"
+    model_version = "v1"
+
+    def score(self, query, items):  # type: ignore[no-untyped-def]
+        from app.reranking.types import RerankScore
+
+        # Later items get higher scores, so the incoming order is reversed.
+        return [
+            RerankScore(chunk_id=item.chunk_id, score=float(index + 1))
+            for index, item in enumerate(items)
+        ]
+
+
+async def test_reranking_reorders_fused_results_and_records_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.reranking.service import RerankService
+
+    lexical = [
+        LexicalMatch(chunk_id=_chunk_id(1), score=0.9),
+        LexicalMatch(chunk_id=_chunk_id(2), score=0.8),
+        LexicalMatch(chunk_id=_chunk_id(3), score=0.7),
+    ]
+    hydrate = {
+        _chunk_id(1): _retrieved(_chunk_id(1), 0.0),
+        _chunk_id(2): _retrieved(_chunk_id(2), 0.0),
+        _chunk_id(3): _retrieved(_chunk_id(3), 0.0),
+    }
+    _install_fakes(monkeypatch, lexical=lexical, dense=[], hydrate=hydrate)
+
+    service = HybridRetrievalService(
+        session=object(),  # type: ignore[arg-type]
+        embedding_service=FakeEmbeddingService(),  # type: ignore[arg-type]
+        rerank_service=RerankService(ReverseReranker()),
+        config=RetrievalConfig(rrf_k=60, candidate_limit=50, top_k=10),
+    )
+    result = await service.search(workspace_id=WORKSPACE, query="q")
+
+    # Fusion order is 1,2,3; the reverse reranker must flip it to 3,2,1.
+    assert [chunk.chunk_id for chunk in result.chunks] == [
+        _chunk_id(3),
+        _chunk_id(2),
+        _chunk_id(1),
+    ]
+    assert result.chunks[0].rerank_rank == 1
+    assert result.chunks[0].rerank_score is not None
+    assert result.trace.reranked is True
+    assert result.trace.rerank_model == "reverse-reranker"
+    assert result.trace.as_metadata()["reranked"] is True
+
+
+async def test_reranking_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    lexical = [
+        LexicalMatch(chunk_id=_chunk_id(1), score=0.9),
+        LexicalMatch(chunk_id=_chunk_id(2), score=0.8),
+    ]
+    hydrate = {
+        _chunk_id(1): _retrieved(_chunk_id(1), 0.0),
+        _chunk_id(2): _retrieved(_chunk_id(2), 0.0),
+    }
+    _install_fakes(monkeypatch, lexical=lexical, dense=[], hydrate=hydrate)
+
+    service = HybridRetrievalService(
+        session=object(),  # type: ignore[arg-type]
+        embedding_service=FakeEmbeddingService(),  # type: ignore[arg-type]
+        config=RetrievalConfig(rerank_enabled=False),
+    )
+    result = await service.search(workspace_id=WORKSPACE, query="q")
+
+    assert result.trace.reranked is False
+    assert all(chunk.rerank_rank is None for chunk in result.chunks)
+    assert [chunk.chunk_id for chunk in result.chunks] == [_chunk_id(1), _chunk_id(2)]

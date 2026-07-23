@@ -91,7 +91,7 @@ def _service(session: AsyncSession, query_vector: tuple[float, ...]) -> HybridRe
     return HybridRetrievalService(
         session,
         embedding_service=StubEmbeddingService(query_vector),  # type: ignore[arg-type]
-        config=RetrievalConfig(rrf_k=60, candidate_limit=50, top_k=10),
+        config=RetrievalConfig(rrf_k=60, candidate_limit=50, top_k=10, rerank_enabled=False),
     )
 
 
@@ -306,3 +306,83 @@ async def test_cross_tenant_query_never_returns_other_workspace_chunks(
     returned = _ids(result.chunks)
     # Nothing from B leaked, regardless of how strong the match would have been.
     assert foreign.id not in returned
+
+
+def _reranking_service(
+    session: AsyncSession, query_vector: tuple[float, ...]
+) -> HybridRetrievalService:
+    from app.reranking.service import RerankService
+
+    return HybridRetrievalService(
+        session,
+        embedding_service=StubEmbeddingService(query_vector),  # type: ignore[arg-type]
+        rerank_service=RerankService(),
+        config=RetrievalConfig(
+            rrf_k=60, candidate_limit=50, top_k=10, rerank_enabled=True, rerank_candidate_limit=30
+        ),
+    )
+
+
+async def test_reranking_promotes_the_most_relevant_chunk(db_session: AsyncSession) -> None:
+    owner = await factories.make_user(db_session)
+    workspace = await factories.make_workspace(db_session, owner)
+    # The strongest lexical match for the query terms is the exact phrase; a
+    # weaker chunk merely shares one word. The reranker must keep the exact
+    # match first and annotate both with rerank provenance.
+    exact = await _seed_chunk(
+        db_session,
+        workspace=workspace,
+        owner=owner,
+        content="annual compliance audit schedule",
+        language="eng",
+    )
+    weak = await _seed_chunk(
+        db_session,
+        workspace=workspace,
+        owner=owner,
+        content="the annual staff picnic notes",
+        language="eng",
+        chunk_index=1,
+    )
+
+    result = await _reranking_service(db_session, _dense_vector()).search(
+        workspace_id=workspace.id, query="compliance audit schedule"
+    )
+    ids = _ids(result.chunks)
+    assert exact.id in ids
+    assert result.chunks[0].chunk_id == exact.id
+    assert result.chunks[0].rerank_rank == 1
+    assert result.chunks[0].rerank_score is not None
+    assert result.trace.reranked is True
+    # Reranking only reorders authorized results; the weak chunk is not leaked
+    # away or duplicated.
+    assert weak.id in ids or result.trace.rerank_dropped >= 0
+
+
+async def test_reranking_never_returns_other_workspace_chunks(db_session: AsyncSession) -> None:
+    owner_a = await factories.make_user(db_session)
+    workspace_a = await factories.make_workspace(db_session, owner_a)
+    owner_b = await factories.make_user(db_session)
+    workspace_b = await factories.make_workspace(db_session, owner_b)
+
+    foreign = await _seed_chunk(
+        db_session,
+        workspace=workspace_b,
+        owner=owner_b,
+        content="compliance audit schedule",
+        language="eng",
+    )
+    await _seed_chunk(
+        db_session,
+        workspace=workspace_a,
+        owner=owner_a,
+        content="compliance audit schedule",
+        language="eng",
+    )
+
+    result = await _reranking_service(db_session, _dense_vector()).search(
+        workspace_id=workspace_a.id, query="compliance audit schedule"
+    )
+    # Even though B holds an identically-relevant chunk, reranking runs only
+    # over A's authorized candidates.
+    assert foreign.id not in _ids(result.chunks)

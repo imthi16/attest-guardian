@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     retrieval_candidate_limit: int = 50
     retrieval_top_k: int = 10
     retrieval_max_top_k: int = 50
+    rerank_enabled: bool = True
+    rerank_threshold: float = 0.0
+    rerank_candidate_limit: int = 30
 
     @model_validator(mode="after")
     def enforce_deployment_secrets(self) -> Self:
