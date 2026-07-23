@@ -61,6 +61,11 @@ class EvidencePassage:
     fused_score: float
     rerank_score: float | None
     order: int  # 0-based position in the ranked evidence list
+    # The reranker's *absolute* relevance score, distinct from ``rerank_score``
+    # which is min-max normalized within one result set (so the top candidate
+    # is always 1.0 and cannot be read as calibrated evidence). Confidence uses
+    # this raw value; ``None`` when the reranker did not run.
+    rerank_raw_score: float | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,24 @@ class Citation:
     page_number: int | None
     section: str | None
     language: str | None
+    # The source chunk's own span within the document, so a client can recover
+    # the document-absolute quote offsets without re-fetching the chunk.
+    chunk_char_start: int
+    chunk_char_end: int
+    # OCR provenance for the source chunk (``None`` for born-digital text), so a
+    # consumer can weigh the reliability of the evidence the quote came from.
+    ocr_engine: str | None
+    ocr_confidence: float | None
+
+    @property
+    def document_quote_char_start(self) -> int:
+        """The quote's start offset relative to the whole document."""
+        return self.chunk_char_start + self.quote_char_start
+
+    @property
+    def document_quote_char_end(self) -> int:
+        """The quote's end offset relative to the whole document."""
+        return self.chunk_char_start + self.quote_char_end
 
     def as_metadata(self) -> dict[str, object]:
         return {
@@ -90,6 +113,10 @@ class Citation:
             "section": self.section,
             "quote_char_start": self.quote_char_start,
             "quote_char_end": self.quote_char_end,
+            "document_quote_char_start": self.document_quote_char_start,
+            "document_quote_char_end": self.document_quote_char_end,
+            "ocr_engine": self.ocr_engine,
+            "ocr_confidence": self.ocr_confidence,
         }
 
 

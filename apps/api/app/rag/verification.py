@@ -98,12 +98,23 @@ class ClaimVerifier:
         passage: EvidencePassage,
     ) -> tuple[ClaimVerdict, float]:
         """Return the verdict and calibrated confidence for one candidate."""
-        # The claim quote must appear verbatim in the cited chunk. Compare on
-        # normalized text so incidental whitespace/case differences do not
-        # reject an otherwise-exact quote, but require true containment.
-        chunk_norm = normalize_for_match(passage.content)
-        quote_norm = normalize_for_match(candidate.quote)
-        if not quote_norm or quote_norm not in chunk_norm:
+        # The citation offsets must recover the quote *exactly* from the cited
+        # chunk. A normalized substring test would accept stale or fabricated
+        # offsets and case/whitespace-shifted spans, so a viewer could highlight
+        # the wrong source text; requiring exact recovery closes that gap.
+        content = passage.content
+        start, end = candidate.quote_char_start, candidate.quote_char_end
+        if not candidate.quote or not (0 <= start <= end <= len(content)):
+            return ClaimVerdict.UNSUPPORTED, 0.0
+        if content[start:end] != candidate.quote:
+            return ClaimVerdict.UNSUPPORTED, 0.0
+
+        # The asserted claim text must itself be grounded in the cited chunk,
+        # not merely accompanied by a harmless verbatim quote. Without this, a
+        # hosted or compromised generator could surface an arbitrary assertion
+        # while citing unrelated text that happens to occur in the chunk.
+        claim_norm = normalize_for_match(candidate.text)
+        if not claim_norm or claim_norm not in normalize_for_match(content):
             return ClaimVerdict.UNSUPPORTED, 0.0
 
         confidence = self._confidence(query_tokens, candidate, passage)
@@ -121,15 +132,27 @@ class ClaimVerifier:
         """Blend retrieval, rerank, OCR, and overlap signals into [0, 1].
 
         No single signal is trusted alone, and a model's self-reported score is
-        never used. OCR confidence only participates when the chunk actually
-        came from OCR; for born-digital text it is treated as fully reliable.
+        never used. The rerank contribution uses the reranker's *absolute* raw
+        score, not the within-set normalized rank (which maps the top candidate
+        to 1.0 regardless of relevance and would let a weak-but-least-bad match
+        cross the support floor). OCR confidence only participates when the
+        chunk came from OCR; for born-digital text it is treated as reliable.
         """
         cfg = self._config
         fused = _clamp(passage.fused_score)
-        rerank = _clamp(passage.rerank_score) if passage.rerank_score is not None else fused
+        # Fall back to the fused score only when the reranker did not run at all.
+        if passage.rerank_raw_score is not None:
+            rerank = _clamp(passage.rerank_raw_score)
+        else:
+            rerank = fused
         overlap = self._overlap(query_tokens, candidate.quote)
-        ocr = passage.ocr_confidence if passage.ocr_engine and passage.ocr_confidence else 1.0
-        ocr = _clamp(ocr)
+        # A born-digital chunk (no OCR engine) is fully reliable; an OCR chunk
+        # uses its confidence verbatim, including a genuine 0.0 — treating a
+        # missing value as perfect would inflate the least-reliable evidence.
+        if passage.ocr_engine and passage.ocr_confidence is not None:
+            ocr = _clamp(passage.ocr_confidence)
+        else:
+            ocr = 1.0
 
         weights = (cfg.fused_weight, cfg.rerank_weight, cfg.overlap_weight, cfg.ocr_weight)
         signals = (fused, rerank, overlap, ocr)
@@ -158,6 +181,10 @@ class ClaimVerifier:
             page_number=passage.page_number,
             section=passage.section,
             language=passage.language,
+            chunk_char_start=passage.char_start,
+            chunk_char_end=passage.char_end,
+            ocr_engine=passage.ocr_engine,
+            ocr_confidence=passage.ocr_confidence,
         )
 
     def _tokens(self, text: str) -> set[str]:

@@ -30,6 +30,7 @@ def _passage(
     chunk_id: uuid.UUID | None = None,
     fused: float = 0.9,
     rerank: float | None = 0.8,
+    rerank_raw: float | None = None,
     ocr_engine: str | None = None,
     ocr_confidence: float | None = None,
 ) -> EvidencePassage:
@@ -48,6 +49,7 @@ def _passage(
         fused_score=fused,
         rerank_score=rerank,
         order=order,
+        rerank_raw_score=rerank_raw,
     )
 
 
@@ -288,6 +290,111 @@ def test_verifier_rejects_empty_quote() -> None:
         quote_char_end=0,
     )
     assert ClaimVerifier().verify("invoice payment", [candidate], [passage]) == []
+
+
+def test_verifier_rejects_unsupported_claim_text_beside_valid_quote() -> None:
+    """A grounded quote cannot smuggle in an assertion absent from the chunk."""
+    content = "invoice payment is due within thirty days"
+    passage = _passage(content, 0)
+    # The quote is verbatim and its offsets are exact, but the asserted text
+    # states something the chunk never says.
+    quote = "within thirty days"
+    start = content.index(quote)
+    candidate = CandidateClaim(
+        chunk_id=passage.chunk_id,
+        text="payment is waived entirely",
+        quote=quote,
+        quote_char_start=start,
+        quote_char_end=start + len(quote),
+    )
+    assert ClaimVerifier().verify("invoice payment", [candidate], [passage]) == []
+
+
+def test_verifier_rejects_quote_whose_offsets_do_not_recover_it() -> None:
+    """Stale/fabricated offsets that don't recover the quote are rejected."""
+    content = "invoice payment is due within thirty days"
+    passage = _passage(content, 0)
+    # The quote text occurs in the chunk, but the offsets point elsewhere, so a
+    # viewer would highlight the wrong span.
+    candidate = CandidateClaim(
+        chunk_id=passage.chunk_id,
+        text="thirty days",
+        quote="thirty days",
+        quote_char_start=0,  # points at "invoice pay", not "thirty days"
+        quote_char_end=11,
+    )
+    assert ClaimVerifier().verify("thirty days", [candidate], [passage]) == []
+
+
+def test_verifier_zero_ocr_confidence_is_not_treated_as_perfect() -> None:
+    """A genuine 0.0 OCR confidence must depress the score, not read as 1.0."""
+    from app.rag.verification import VerificationConfig
+
+    content = "invoice payment is due within thirty days"
+    quote = content
+    candidate = CandidateClaim(
+        chunk_id=uuid.UUID(int=100),
+        text=quote,
+        quote=quote,
+        quote_char_start=0,
+        quote_char_end=len(quote),
+    )
+    verifier = ClaimVerifier(config=VerificationConfig(min_confidence=0.0))
+    zero = _passage(content, 0, ocr_engine="paddle", ocr_confidence=0.0)
+    perfect = _passage(content, 0, ocr_engine=None, ocr_confidence=None)
+    zero_conf = verifier.verify("invoice payment thirty days", [candidate], [zero])
+    perfect_conf = verifier.verify("invoice payment thirty days", [candidate], [perfect])
+    assert zero_conf and perfect_conf
+    assert zero_conf[0].confidence < perfect_conf[0].confidence
+
+
+def test_verifier_uses_absolute_rerank_score_not_relative_rank() -> None:
+    """A weak match whose normalized rerank rank is 1.0 must not be inflated."""
+    # Query shares no tokens with the chunk, so lexical overlap is 0. The
+    # normalized rerank score is 1.0 (it is always 1.0 for the top candidate),
+    # but the absolute raw score is low, so confidence must stay below the floor.
+    passage = _passage(
+        "the cafeteria menu changes every week",
+        0,
+        fused=0.02,
+        rerank=1.0,
+        rerank_raw=0.05,
+    )
+    quote = "the cafeteria menu changes every week"
+    candidate = CandidateClaim(
+        chunk_id=passage.chunk_id,
+        text=quote,
+        quote=quote,
+        quote_char_start=0,
+        quote_char_end=len(quote),
+    )
+    assert ClaimVerifier().verify("invoice payment due date", [candidate], [passage]) == []
+
+
+def test_citation_carries_document_absolute_offsets_and_ocr_provenance() -> None:
+    passage = _passage(
+        "invoice payment is due within thirty days",
+        2,  # char_start = 2000
+        ocr_engine="paddle",
+        ocr_confidence=0.6,
+    )
+    quote = "within thirty days"
+    start = passage.content.index(quote)
+    candidate = CandidateClaim(
+        chunk_id=passage.chunk_id,
+        text=quote,
+        quote=quote,
+        quote_char_start=start,
+        quote_char_end=start + len(quote),
+    )
+    claims = ClaimVerifier().verify("thirty days invoice", [candidate], [passage])
+    assert len(claims) == 1
+    citation = claims[0].citation
+    assert citation.chunk_char_start == passage.char_start
+    assert citation.document_quote_char_start == passage.char_start + start
+    assert citation.document_quote_char_end == passage.char_start + start + len(quote)
+    assert citation.ocr_engine == "paddle"
+    assert citation.ocr_confidence == 0.6
 
 
 # --- generation behaviour ---------------------------------------------------

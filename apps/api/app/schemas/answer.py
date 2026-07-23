@@ -19,7 +19,14 @@ class AnswerRequest(BaseModel):
 
 
 class CitationResponse(BaseModel):
-    """One evidence span supporting a claim, with full provenance."""
+    """One evidence span supporting a claim, with full provenance.
+
+    Offsets are exposed both relative to the source chunk
+    (``quote_char_start``/``quote_char_end``) and relative to the whole document
+    (``document_quote_char_start``/``document_quote_char_end``), and the source
+    chunk's OCR provenance travels with the citation so a consumer can locate
+    and weigh the exact evidence without a second lookup.
+    """
 
     chunk_id: uuid.UUID
     document_id: uuid.UUID
@@ -27,9 +34,13 @@ class CitationResponse(BaseModel):
     quote: str
     quote_char_start: int
     quote_char_end: int
+    document_quote_char_start: int
+    document_quote_char_end: int
     page_number: int | None
     section: str | None
     language: str | None
+    ocr_engine: str | None
+    ocr_confidence: float | None
 
 
 class ClaimResponse(BaseModel):
@@ -75,9 +86,13 @@ class AnswerResponse(BaseModel):
                         quote=claim.citation.quote,
                         quote_char_start=claim.citation.quote_char_start,
                         quote_char_end=claim.citation.quote_char_end,
+                        document_quote_char_start=claim.citation.document_quote_char_start,
+                        document_quote_char_end=claim.citation.document_quote_char_end,
                         page_number=claim.citation.page_number,
                         section=claim.citation.section,
                         language=claim.citation.language,
+                        ocr_engine=claim.citation.ocr_engine,
+                        ocr_confidence=claim.citation.ocr_confidence,
                     ),
                 )
                 for claim in answer.claims

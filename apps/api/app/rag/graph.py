@@ -82,8 +82,8 @@ class RagGraph:
 
     # --- graph construction -------------------------------------------------
 
-    def _build(self) -> CompiledStateGraph:
-        graph: StateGraph = StateGraph(RagState)
+    def _build(self) -> CompiledStateGraph[RagState]:
+        graph: StateGraph[RagState] = StateGraph(RagState)
         graph.add_node("authorize", self._authorize)
         graph.add_node("analyze", self._analyze)
         graph.add_node("retrieve", self._retrieve)

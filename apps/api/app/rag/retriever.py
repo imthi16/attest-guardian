@@ -61,5 +61,6 @@ def _to_passage(chunk: RetrievedChunk, order: int) -> EvidencePassage:
         ocr_confidence=chunk.ocr_confidence,
         fused_score=chunk.fused_score,
         rerank_score=chunk.rerank_score,
+        rerank_raw_score=chunk.rerank_raw_score,
         order=order,
     )
