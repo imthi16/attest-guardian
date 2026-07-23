@@ -150,18 +150,16 @@ jobs:
       - name: Build web image
         run: docker build -t attest-web:scan apps/web
       - name: Scan API image for OS and library vulnerabilities
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: attest-api:scan
           severity: CRITICAL,HIGH
-          vuln-type: os,library
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan web image for OS and library vulnerabilities
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: attest-web:scan
           severity: CRITICAL,HIGH
-          vuln-type: os,library
           ignore-unfixed: true
           exit-code: "1"
