@@ -121,7 +121,8 @@ async def test_every_pipeline_citation_resolves_and_matches() -> None:
             )
             # The resolver's supporting text is the exact cited quote.
             assert resolved.supporting_text == citation.quote
-            assert 0.0 <= resolved.support_score <= 1.0
+            # Born-digital corpus: reliability is known and fully reliable.
+            assert resolved.support_score == 1.0
             total_citations += 1
 
     # The evaluation is only meaningful if it actually exercised citations.

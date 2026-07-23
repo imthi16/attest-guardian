@@ -17,7 +17,10 @@ import httpx
 import pytest
 from app.config import Settings
 from app.db.models.documents import Chunk, Document, DocumentVersion
+from app.db.models.enums import DocumentStatus
 from app.db.models.identity import User, Workspace
+from app.db.models.operations import AuditLog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.integration import factories
@@ -53,6 +56,7 @@ async def _seed_chunk(
     content: str = CONTENT,
     title: str = "Vendor Agreement",
     char_start: int = 500,
+    status: DocumentStatus = DocumentStatus.READY,
 ) -> Chunk:
     document = Document(
         workspace_id=workspace.id,
@@ -62,6 +66,7 @@ async def _seed_chunk(
         mime_type="application/pdf",
         size_bytes=2048,
         sha256="d" * 64,
+        status=status,
     )
     session.add(document)
     await session.flush()
@@ -129,9 +134,26 @@ async def test_resolves_seeded_citation_to_provenance_and_exact_text(
     assert body["page_number"] == 7
     assert body["section"] == "Payment terms"
     assert body["chunk_char_start"] == 500
-    assert body["document_quote_char_start"] == 500 + start
-    assert body["document_quote_char_end"] == 500 + start + len(quote)
+    assert body["page_quote_char_start"] == 500 + start
+    assert body["page_quote_char_end"] == 500 + start + len(quote)
     assert body["support_score"] == 1.0
+
+    # The accepted resolution is recorded in the append-only audit log.
+    audits = (
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.workspace_id == workspace.id,
+                    AuditLog.action == "citation.resolve",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(audits) == 1
+    assert audits[0].detail["outcome"] == "resolved"
+    assert audits[0].actor_user_id == user.id
 
 
 async def test_out_of_range_reference_is_rejected(
@@ -159,6 +181,75 @@ async def test_out_of_range_reference_is_rejected(
     )
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "citation_out_of_range"
+
+
+async def test_negative_offset_uses_stable_citation_envelope(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A negative offset is a domain failure, not a generic validation error."""
+    owner = await make_account(client, "c-negative@example.com")
+    workspace_id = await make_workspace(client, owner)
+    workspace = await db_session.get(Workspace, workspace_id)
+    user = await db_session.get(User, owner.user_id)
+    assert workspace is not None and user is not None
+    chunk = await _seed_chunk(db_session, workspace=workspace, owner=user)
+    await db_session.flush()
+
+    body = {
+        "document_version_id": str(chunk.document_version_id),
+        "chunk_id": str(chunk.id),
+        "quote": "invoice",
+        "quote_char_start": -3,
+        "quote_char_end": 4,
+    }
+    response = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/citations/resolve",
+        json=body,
+        headers=owner.headers,
+    )
+    assert response.status_code == 422
+    # The stable citation envelope, not FastAPI's generic validation list.
+    assert response.json()["detail"]["code"] == "citation_out_of_range"
+
+    # The rejection is recorded in the audit log.
+    audits = (
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.workspace_id == workspace.id,
+                    AuditLog.action == "citation.resolve",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(audits) == 1
+    assert audits[0].detail["outcome"] == "rejected"
+    assert audits[0].detail["code"] == "citation_out_of_range"
+
+
+async def test_citation_from_non_ready_document_is_not_found(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """A quarantined/incomplete document's chunk must never resolve."""
+    owner = await make_account(client, "c-notready@example.com")
+    workspace_id = await make_workspace(client, owner)
+    workspace = await db_session.get(Workspace, workspace_id)
+    user = await db_session.get(User, owner.user_id)
+    assert workspace is not None and user is not None
+    chunk = await _seed_chunk(
+        db_session, workspace=workspace, owner=user, status=DocumentStatus.QUARANTINED
+    )
+    await db_session.flush()
+
+    response = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/citations/resolve",
+        json=_reference_body(chunk, "invoice payment"),
+        headers=owner.headers,
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "citation_not_found"
 
 
 async def test_quote_mismatch_is_rejected(

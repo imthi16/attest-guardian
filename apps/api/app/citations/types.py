@@ -89,10 +89,18 @@ class ResolvedCitation:
     ``supporting_text`` is sliced from stored chunk content at the validated
     offsets, so it is the exact evidence span — never the caller's quote echoed
     back. ``support_score`` is a deterministic source-reliability signal in
-    ``[0, 1]``: OCR-derived spans carry their page/chunk OCR confidence, while
-    born-digital text is fully reliable (``1.0``). It is distinct from the
-    answer-time claim confidence computed during verification, which blends
-    query-dependent retrieval signals this standalone lookup does not have.
+    ``[0, 1]``: born-digital text is fully reliable (``1.0``) and OCR-derived
+    spans carry their recorded OCR confidence, but it is ``None`` when the span
+    came from OCR with no recorded confidence (reliability genuinely unknown).
+    It is distinct from the answer-time claim confidence computed during
+    verification, which blends query-dependent retrieval signals this standalone
+    lookup does not have.
+
+    Offsets are *page-relative*: chunk offsets never span pages, so
+    ``page_quote_char_start``/``page_quote_char_end`` locate the span within its
+    page's text (``chunk_char_start`` + the in-chunk quote offset). A true
+    document-wide offset would require a persisted per-page base this lookup
+    does not have, so it is deliberately not claimed.
     """
 
     document_id: uuid.UUID
@@ -112,14 +120,14 @@ class ResolvedCitation:
     supporting_text: str
     ocr_engine: str | None
     ocr_confidence: float | None
-    support_score: float
+    support_score: float | None
 
     @property
-    def document_quote_char_start(self) -> int:
-        """The span's start offset relative to the whole document."""
+    def page_quote_char_start(self) -> int:
+        """The span's start offset within its page's text."""
         return self.chunk_char_start + self.quote_char_start
 
     @property
-    def document_quote_char_end(self) -> int:
-        """The span's end offset relative to the whole document."""
+    def page_quote_char_end(self) -> int:
+        """The span's end offset within its page's text."""
         return self.chunk_char_start + self.quote_char_end

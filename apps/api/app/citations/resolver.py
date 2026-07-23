@@ -35,17 +35,20 @@ class ChunkProvenanceReader(Protocol):
     async def get_provenance(self, chunk_id: uuid.UUID) -> ChunkProvenance | None: ...
 
 
-def _reliability(provenance: ChunkProvenance) -> float:
+def _reliability(provenance: ChunkProvenance) -> float | None:
     """Source-reliability score in [0, 1] for a chunk's support span.
 
-    Born-digital text (no OCR engine) is fully reliable. OCR-derived text is
-    only as reliable as its recorded confidence; an OCR chunk with no recorded
-    confidence is treated as reliable rather than penalized, matching the
-    verifier's OCR handling.
+    Only born-digital text (no OCR engine) is fully reliable (``1.0``).
+    OCR-derived text is worth exactly its recorded confidence; when an OCR
+    chunk has *no* recorded confidence the reliability is genuinely unknown, so
+    this returns ``None`` (unavailable) rather than presenting unverified OCR as
+    perfectly reliable.
     """
-    if provenance.ocr_engine and provenance.ocr_confidence is not None:
-        return max(0.0, min(1.0, provenance.ocr_confidence))
-    return 1.0
+    if provenance.ocr_engine is None:
+        return 1.0
+    if provenance.ocr_confidence is None:
+        return None
+    return max(0.0, min(1.0, provenance.ocr_confidence))
 
 
 class CitationResolver:
@@ -61,19 +64,15 @@ class CitationResolver:
         cross-tenant, out of range, or does not quote the stored text exactly.
         """
         provenance = await self._reader.get_provenance(reference.chunk_id)
-        if provenance is None:
-            # Fake, deleted, or cross-tenant: all indistinguishable by design.
+        # Fake, deleted, cross-tenant, and version-mismatched references must be
+        # indistinguishable, so both the missing-chunk case and the
+        # wrong-version case raise the *same* generic not-found error: a caller
+        # holding a candidate chunk id can learn nothing about which versions it
+        # belongs to or whether it exists in another workspace.
+        if provenance is None or provenance.document_version_id != reference.document_version_id:
             raise CitationError(
                 CitationErrorCode.NOT_FOUND,
                 "The cited chunk does not exist in this workspace.",
-            )
-        if provenance.document_version_id != reference.document_version_id:
-            # The chunk exists but not under the claimed version: a stale or
-            # mismatched reference. Reported as not-found, not as a mismatch, so
-            # it cannot be used to probe which versions a chunk belongs to.
-            raise CitationError(
-                CitationErrorCode.NOT_FOUND,
-                "The cited chunk does not belong to the referenced document version.",
             )
 
         start, end = reference.quote_char_start, reference.quote_char_end

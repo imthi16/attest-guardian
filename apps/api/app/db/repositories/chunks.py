@@ -19,6 +19,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.citations.types import ChunkProvenance
 from app.db.models.documents import Chunk, Document, DocumentVersion
+from app.db.models.enums import DocumentStatus
 from app.db.repositories.base import WorkspaceScopedRepository
 
 # Matches the configuration of ix_chunks_content_fts (migration 0008).
@@ -105,7 +106,10 @@ class ChunkRepository(WorkspaceScopedRepository[Chunk]):
         and version number a citation needs. The workspace filter is applied on
         the chunk (and row-level security fences it again), so a chunk owned by
         another tenant resolves to ``None`` and is indistinguishable from one
-        that does not exist.
+        that does not exist. Only chunks of a ``READY`` document are returned:
+        ingestion commits chunks stage by stage, so a later quarantine or
+        failure can leave chunk rows behind on a document that must never be
+        cited — requiring readiness here keeps that text out of resolution.
         """
         statement = (
             select(
@@ -116,7 +120,11 @@ class ChunkRepository(WorkspaceScopedRepository[Chunk]):
             )
             .join(DocumentVersion, Chunk.document_version_id == DocumentVersion.id)
             .join(Document, DocumentVersion.document_id == Document.id)
-            .where(Chunk.id == chunk_id, Chunk.workspace_id == self.workspace_id)
+            .where(
+                Chunk.id == chunk_id,
+                Chunk.workspace_id == self.workspace_id,
+                Document.status == DocumentStatus.READY,
+            )
         )
         row = (await self._session.execute(statement)).first()
         if row is None:

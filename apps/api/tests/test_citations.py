@@ -91,9 +91,9 @@ async def test_resolves_valid_reference_to_immutable_provenance() -> None:
     assert resolved.version_number == 2
     assert resolved.page_number == 7
     assert resolved.section == "Payment terms"
-    # Document-absolute offsets are the chunk's own start plus the in-chunk span.
-    assert resolved.document_quote_char_start == 500 + start
-    assert resolved.document_quote_char_end == 500 + start + len(quote)
+    # Page-relative offsets are the chunk's own start plus the in-chunk span.
+    assert resolved.page_quote_char_start == 500 + start
+    assert resolved.page_quote_char_end == 500 + start + len(quote)
     # Born-digital text is fully reliable.
     assert resolved.support_score == 1.0
 
@@ -168,9 +168,11 @@ async def test_ocr_confidence_becomes_support_score() -> None:
     assert resolved.ocr_engine == "paddle"
 
 
-async def test_ocr_chunk_without_recorded_confidence_is_reliable() -> None:
+async def test_ocr_chunk_without_recorded_confidence_has_unknown_support() -> None:
+    """Unknown OCR reliability is reported as None, not as perfect (1.0)."""
     resolver = CitationResolver(FakeReader(_provenance(ocr_engine="paddle", ocr_confidence=None)))
     quote = "invoice"
     start = CONTENT.index(quote)
     resolved = await resolver.resolve(_reference(quote=quote, start=start, end=start + len(quote)))
-    assert resolved.support_score == 1.0
+    assert resolved.support_score is None
+    assert resolved.ocr_engine == "paddle"
