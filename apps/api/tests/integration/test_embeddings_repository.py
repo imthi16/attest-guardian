@@ -15,7 +15,7 @@ from app.db.models.documents import EMBEDDING_DIMENSIONS
 from app.db.repositories.embeddings import ChunkEmbeddingRepository
 from app.embeddings import EmbeddingService, LocalHashingEmbeddingProvider
 from app.embeddings.types import EmbeddingVector
-from sqlalchemy.exc import DataError, IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError, StatementError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.integration.factories import (
@@ -108,7 +108,7 @@ async def test_duplicate_model_version_conflicts_at_db(db_session: AsyncSession)
         await db_session.flush()
 
 
-async def test_wrong_dimension_vector_is_rejected_by_db(db_session: AsyncSession) -> None:
+async def test_wrong_dimension_vector_is_rejected(db_session: AsyncSession) -> None:
     workspace, chunk = await _chunk_in_new_workspace(db_session)
     from app.db.models import ChunkEmbedding
 
@@ -122,7 +122,9 @@ async def test_wrong_dimension_vector_is_rejected_by_db(db_session: AsyncSession
             embedding=[0.1] * 8,  # not EMBEDDING_DIMENSIONS
         )
     )
-    with pytest.raises((DataError, IntegrityError)):
+    # pgvector enforces the fixed column width; the mismatch is caught when the
+    # statement is bound (StatementError wrapping ValueError) or by the DB.
+    with pytest.raises((StatementError, DataError, IntegrityError)):
         await db_session.flush()
 
 

@@ -171,6 +171,10 @@ class ChunkEmbedding(WorkspaceOwnedModel):
             "model_version",
             name="uq_chunk_embeddings_chunk_id_model_model_version",
         ),
+        # The IVFFlat ANN index (ix_chunk_embeddings_embedding_cosine) is
+        # created in migration 0007 and deliberately excluded from Alembic
+        # autogenerate (see infra/migrations/env.py): pgvector operator-class
+        # indexes do not round-trip cleanly through reflection.
     )
 
     chunk_id: Mapped[uuid.UUID] = mapped_column(

@@ -79,10 +79,13 @@ def upgrade() -> None:
     # Approximate-nearest-neighbor index for cosine distance. IVFFlat needs
     # data to train its lists well; it is created empty here and can be
     # reindexed after backfill. Retrieval may also fall back to exact scan.
-    op.execute(
-        "CREATE INDEX ix_chunk_embeddings_embedding_cosine "
-        "ON chunk_embeddings USING ivfflat (embedding vector_cosine_ops) "
-        "WITH (lists = 100)"
+    op.create_index(
+        "ix_chunk_embeddings_embedding_cosine",
+        "chunk_embeddings",
+        ["embedding"],
+        postgresql_using="ivfflat",
+        postgresql_with={"lists": 100},
+        postgresql_ops={"embedding": "vector_cosine_ops"},
     )
 
     op.execute("ALTER TABLE chunk_embeddings ENABLE ROW LEVEL SECURITY")
