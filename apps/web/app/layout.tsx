@@ -11,7 +11,13 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
-      <body>
+      {/*
+        Browser extensions (e.g. Grammarly) inject attributes such as
+        data-gr-ext-installed onto <body> before hydration. suppressHydrationWarning
+        limits the mismatch check to this element only and does not hide real
+        application markup differences.
+      */}
+      <body suppressHydrationWarning>
         <a className="skip-link" href="#main-content">
           Skip to main content
         </a>
