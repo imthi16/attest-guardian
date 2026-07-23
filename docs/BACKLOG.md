@@ -18,4 +18,4 @@ flowchart LR
 ```
 
 The canonical scope and acceptance criteria are maintained in
-[GitHub issues #1–#26](https://github.com/imthi16/nambikkai-guardian/issues).
+[GitHub issues #1–#26](https://github.com/imthi16/attest-guardian/issues).

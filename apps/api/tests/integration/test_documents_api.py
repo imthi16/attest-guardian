@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.integration.apptools import Account, build_client, make_account
 
-TEST_BUCKET = "nambikkai-test-documents"
+TEST_BUCKET = "attest-test-documents"
 PDF_BYTES = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 

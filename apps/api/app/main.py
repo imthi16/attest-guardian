@@ -1,4 +1,4 @@
-"""FastAPI application factory for NambikkAI Guardian."""
+"""FastAPI application factory for Attest Guardian."""
 
 from fastapi import FastAPI
 
@@ -14,7 +14,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Build an application with validated configuration."""
     resolved_settings = settings or get_settings()
     application = FastAPI(
-        title="NambikkAI Guardian API",
+        title="Attest Guardian API",
         description=("Secure multilingual document intelligence for Tamil, Tanglish, and English."),
         version=resolved_settings.app_version,
         docs_url="/docs" if resolved_settings.api_docs_enabled else None,

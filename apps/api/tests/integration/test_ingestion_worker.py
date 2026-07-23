@@ -33,8 +33,8 @@ from tests.integration import factories
 from tests.integration.dbtools import alembic, provision_database
 from tests.pdftools import digital_pdf
 
-WORKER_DB = "nambikkai_worker_test"
-TEST_BUCKET = "nambikkai-test-documents"
+WORKER_DB = "attest_worker_test"
+TEST_BUCKET = "attest-test-documents"
 PDF_BYTES = digital_pdf("Worker pipeline body with plenty of digital text on one page.")
 
 

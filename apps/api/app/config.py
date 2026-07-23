@@ -42,12 +42,12 @@ class Settings(BaseSettings):
     api_docs_enabled: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
-    database_url: str = "postgresql+asyncpg://nambikkai:nambikkai@localhost:5432/nambikkai"
+    database_url: str = "postgresql+asyncpg://attest:attest@localhost:5432/attest"
     redis_url: str = "redis://localhost:6379/0"
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "minio"
     s3_secret_key: SecretStr = SecretStr("minio123")
-    s3_bucket: str = "nambikkai-documents"
+    s3_bucket: str = "attest-documents"
     jwt_secret: SecretStr = SecretStr("development-only-change-me")
     access_token_ttl_seconds: int = 900
     refresh_token_ttl_seconds: int = 14 * 24 * 3600
@@ -55,8 +55,8 @@ class Settings(BaseSettings):
     auth_rate_limit_window_seconds: int = 60
     max_upload_bytes: int = 25 * 1024 * 1024
     download_url_ttl_seconds: int = 300
-    ingestion_queue_key: str = "nambikkai:ingestion:queue"
-    ingestion_dead_letter_key: str = "nambikkai:ingestion:dead"
+    ingestion_queue_key: str = "attest:ingestion:queue"
+    ingestion_dead_letter_key: str = "attest:ingestion:dead"
     ingestion_max_attempts: int = 3
     ingestion_stale_after_seconds: int = 300
     ingestion_store_page_images: bool = True

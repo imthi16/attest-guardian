@@ -10,7 +10,7 @@ API_BIN := $(API_VENV)/bin
 .PHONY: help install install-api install-web hooks dev-api dev-web format format-check lint typecheck test build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
 
 help: ## Show available development commands.
-	@awk 'BEGIN {FS = ":.*## "; printf "NambikkAI Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "; printf "Attest Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install: install-api install-web ## Install all local development dependencies.
 

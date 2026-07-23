@@ -29,8 +29,8 @@ from tests.integration import factories
 from tests.integration.dbtools import alembic, provision_database
 from tests.pdftools import digital_pdf
 
-PARSING_DB = "nambikkai_parsing_test"
-TEST_BUCKET = "nambikkai-test-documents"
+PARSING_DB = "attest_parsing_test"
+TEST_BUCKET = "attest-test-documents"
 TAMIL_TEXT = "வணக்கம் — இது ஒரு சோதனை ஆவணம்."
 
 

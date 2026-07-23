@@ -14,6 +14,6 @@ async def health() -> HealthResponse:
     settings = get_settings()
     return HealthResponse(
         status="ok",
-        service="nambikkai-api",
+        service="attest-api",
         version=settings.app_version,
     )

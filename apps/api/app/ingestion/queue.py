@@ -26,8 +26,8 @@ def _op(result: "Awaitable[T] | T") -> "Awaitable[T]":
     return cast("Awaitable[T]", result)
 
 
-DEFAULT_QUEUE_KEY = "nambikkai:ingestion:queue"
-DEFAULT_DEAD_LETTER_KEY = "nambikkai:ingestion:dead"
+DEFAULT_QUEUE_KEY = "attest:ingestion:queue"
+DEFAULT_DEAD_LETTER_KEY = "attest:ingestion:dead"
 
 
 @dataclass(frozen=True)

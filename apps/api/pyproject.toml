@@ -3,9 +3,9 @@ requires = ["hatchling>=1.26,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "nambikkai-api"
+name = "attest-api"
 version = "0.1.0"
-description = "FastAPI backend for NambikkAI Guardian"
+description = "FastAPI backend for Attest Guardian"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -10,9 +10,9 @@ import asyncpg
 import pytest
 from sqlalchemy.engine import make_url
 
-TEST_DB = "nambikkai_test"
-MIGRATION_TEST_DB = "nambikkai_migration_test"
-_DEFAULT_URL = "postgresql+asyncpg://nambikkai:nambikkai@localhost:5432/nambikkai"
+TEST_DB = "attest_test"
+MIGRATION_TEST_DB = "attest_migration_test"
+_DEFAULT_URL = "postgresql+asyncpg://attest:attest@localhost:5432/attest"
 
 
 def repo_root() -> Path:

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-NambikkAI Guardian is a secure multilingual document-intelligence platform for Tamil, Tanglish, and
+Attest Guardian is a secure multilingual document-intelligence platform for Tamil, Tanglish, and
 English. It answers only from evidence, attaches precise citations, verifies claims, detects
 prompt-injection attempts, and abstains when evidence is insufficient. The full mission and
 non-negotiable engineering rules live in [`AGENTS.md`](./AGENTS.md) — read it before making changes;
@@ -93,7 +93,7 @@ Repository layout and intended ownership per directory:
   `WorkspaceScopedRepository`, which filters every query by `workspace_id`. Schema changes require
   an Alembic revision in `infra/migrations/versions/`; the integration test suite runs
   `alembic check` so models and migrations may not drift. API integration tests need the
-  `make infra-up` Postgres (they provision disposable `nambikkai_test` databases). Authentication
+  `make infra-up` Postgres (they provision disposable `attest_test` databases). Authentication
   lives in `app/auth/` (Argon2id passwords, HS256 access JWTs, DB-backed rotating refresh tokens
   with reuse detection, sliding-window rate limiting) behind `/api/v1/auth`; protected routes take
   the `CurrentUserDep` dependency, per-app state (`app.state.settings`, `auth_rate_limiter`) is set
@@ -106,13 +106,13 @@ Repository layout and intended ownership per directory:
   filename/extension/declared-MIME/content-magic before any byte reaches storage, dedupe by
   SHA-256 per workspace, and store via the `ObjectStorage` interface (`app/storage/`,
   S3/MinIO impl); downloads are presigned URLs. Storage integration tests need the
-  `make infra-up` MinIO and use a separate `nambikkai-test-documents` bucket. Ingestion
+  `make infra-up` MinIO and use a separate `attest-test-documents` bucket. Ingestion
   (`app/ingestion/`): uploads enqueue `{job_id, workspace_id}` on a Redis list; the worker
   (`make dev-worker`, `python -m app.ingestion.worker`) claims jobs by compare-and-set (duplicate
   delivery safe), walks stage enums committed per transition, retries transient failures, and
   dead-letters after `INGESTION_MAX_ATTEMPTS`; quarantine (EICAR placeholder scanner) and
   integrity failures never retry. Worker tests use dedicated committed DBs
-  (`nambikkai_worker_test`, `nambikkai_parsing_test`), not the rolled-back `db_session`.
+  (`attest_worker_test`, `attest_parsing_test`), not the rolled-back `db_session`.
   Parsing (`app/parsing/`): pypdf → pdfium fallback, scanned-page heuristic (<24 chars),
   `OcrEngine` protocol (`tesseract` adapter or `none` → `ocr_engine="unavailable"` provenance);
   PDF test fixtures are generated in-memory via `tests/pdftools.py` (reportlab), never

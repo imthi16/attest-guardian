@@ -1,1 +1,1 @@
-"""NambikkAI Guardian API package."""
+"""Attest Guardian API package."""

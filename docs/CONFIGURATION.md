@@ -13,7 +13,7 @@ The committed `.env.example` contains non-secret local defaults only.
 | `REDIS_URL` | Queue/cache connection URL | Local Redis |
 | `S3_ENDPOINT` | S3-compatible endpoint | Local MinIO |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` | Object-storage credentials | Local-only values |
-| `S3_BUCKET` | Private document bucket | `nambikkai-documents` |
+| `S3_BUCKET` | Private document bucket | `attest-documents` |
 | `JWT_SECRET` | HS256 signing secret for access tokens | Local-only value |
 | `ACCESS_TOKEN_TTL_SECONDS` | Access-token lifetime | `900` (15 minutes) |
 | `REFRESH_TOKEN_TTL_SECONDS` | Refresh-token lifetime | `1209600` (14 days) |
@@ -21,7 +21,7 @@ The committed `.env.example` contains non-secret local defaults only.
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Rate-limit window length | `60` |
 | `MAX_UPLOAD_BYTES` | Document upload size cap | `26214400` (25 MiB) |
 | `DOWNLOAD_URL_TTL_SECONDS` | Presigned download-link lifetime | `300` |
-| `INGESTION_QUEUE_KEY`, `INGESTION_DEAD_LETTER_KEY` | Redis list keys for the job queue | `nambikkai:ingestion:*` |
+| `INGESTION_QUEUE_KEY`, `INGESTION_DEAD_LETTER_KEY` | Redis list keys for the job queue | `attest:ingestion:*` |
 | `INGESTION_MAX_ATTEMPTS` | Attempts before a job dead-letters | `3` |
 | `INGESTION_STALE_AFTER_SECONDS` | Age before running/queued jobs are recovered | `300` |
 | `INGESTION_STORE_PAGE_IMAGES` | Store rendered PNGs of OCR'd pages | `true` |
