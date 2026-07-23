@@ -89,3 +89,36 @@ is workspace-scoped: persistence checks the chunk belongs to the caller's
 workspace, and cosine search filters by workspace and model version so
 unauthorized vectors never leave the data layer. Telemetry records counts and
 the model, never document text.
+
+## Permission-filtered hybrid retrieval
+
+`app.retrieval` answers a workspace query by running two retrievers and fusing
+their rankings:
+
+- **Lexical**: PostgreSQL full-text search over `chunks.content` using the
+  `simple` text-search configuration, ranked with `ts_rank_cd` and backed by a
+  GIN expression index (migration 0008). `simple` applies no language-specific
+  stemming, so Tamil, English, and romanized Tanglish tokens are indexed and
+  matched uniformly. Free-text queries are parsed with `websearch_to_tsquery`,
+  which never raises on arbitrary punctuation, so untrusted query text cannot
+  cause a parse error or injection.
+- **Dense**: pgvector cosine search over `chunk_embeddings` for the query's
+  own model version.
+
+The query's `search_variants` (normalized, transliterated, expansions) drive
+the lexical side so a Tanglish query can match Tamil-script content. Both
+retrievers run through workspace-scoped repositories, so the workspace filter
+(and row-level security beneath it) is applied *before* any candidate is
+scored: there is no code path that returns a chunk another tenant owns.
+Optional `document_id` and `language` filters narrow both sides identically.
+
+Rankings are merged with **Reciprocal Rank Fusion** (`1 / (k + rank)`, default
+`k = 60`), a pure, deterministic function that needs only ranks, not
+comparable scores, which is exactly right for mixing `ts_rank_cd` relevance
+with cosine similarity. Fused ids are hydrated into fully-provenanced results
+(document, page, section, offsets, language, OCR) that downstream citation and
+verification depend on. Every retrieval emits a structured `RetrievalTrace`
+(candidate counts, per-source ranks, fused scores, filters, timings) that
+carries no query text, chunk content, or secrets, so it is safe to log and
+return. The endpoint `POST /workspaces/{id}/retrieval/search` requires the
+`QUERY` capability and clamps caller-supplied `top_k` to a configured maximum.

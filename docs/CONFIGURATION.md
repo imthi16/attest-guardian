@@ -34,6 +34,10 @@ The committed `.env.example` contains non-secret local defaults only.
 | `EMBEDDING_DIMENSIONS` | Vector width; must match the `chunk_embeddings` column | `1024` |
 | `EMBEDDING_BATCH_SIZE` | Inputs per provider call | `32` |
 | `EMBEDDING_MAX_ATTEMPTS`, `EMBEDDING_BACKOFF_SECONDS` | Retry budget for transient provider errors | `3`, `0.5` |
+| `RETRIEVAL_RRF_K` | Reciprocal Rank Fusion constant (larger flattens rank advantage) | `60` |
+| `RETRIEVAL_CANDIDATE_LIMIT` | Max candidates fetched per retriever before fusion | `50` |
+| `RETRIEVAL_TOP_K` | Default number of fused results returned | `10` |
+| `RETRIEVAL_MAX_TOP_K` | Upper bound a request's `top_k` is clamped to | `50` |
 
 Known local secrets are rejected when `APP_ENV` is `staging` or `production`. Deployed secrets must
 come from a secret manager or protected environment configuration, never a checked-in file. Keep
