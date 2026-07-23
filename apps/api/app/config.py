@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 32
     embedding_max_attempts: int = 3
     embedding_backoff_seconds: float = 0.5
+    retrieval_rrf_k: int = 60
+    retrieval_candidate_limit: int = 50
+    retrieval_top_k: int = 10
+    retrieval_max_top_k: int = 50
 
     @model_validator(mode="after")
     def enforce_deployment_secrets(self) -> Self:

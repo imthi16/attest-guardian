@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 
-from app.db.models.documents import Chunk, ChunkEmbedding
+from app.db.models.documents import Chunk, ChunkEmbedding, DocumentVersion
 from app.db.repositories.base import WorkspaceScopedRepository
 from app.embeddings.types import EmbeddingVector
 
@@ -98,21 +98,37 @@ class ChunkEmbeddingRepository(WorkspaceScopedRepository[ChunkEmbedding]):
         query: EmbeddingVector,
         *,
         limit: int = 10,
+        document_id: uuid.UUID | None = None,
+        language: str | None = None,
     ) -> Sequence[VectorMatch]:
         """Return the closest chunks in this workspace by cosine similarity.
 
         Similarity is `1 - cosine_distance`, so higher is nearer. Only the
         query's own model/version is compared, keeping the vector space
-        consistent.
+        consistent. Optional `document_id`/`language` filters narrow candidates
+        to the same subset the lexical side uses, so fusion compares like sets.
         """
         distance = ChunkEmbedding.embedding.cosine_distance(list(query.values))
+        conditions = [
+            ChunkEmbedding.workspace_id == self.workspace_id,
+            ChunkEmbedding.model == query.model,
+            ChunkEmbedding.model_version == query.model_version,
+        ]
+        if document_id is not None or language is not None:
+            chunk_filter = [Chunk.id == ChunkEmbedding.chunk_id]
+            if document_id is not None:
+                chunk_filter.append(
+                    Chunk.document_version_id.in_(
+                        select(DocumentVersion.id).where(DocumentVersion.document_id == document_id)
+                    )
+                )
+            if language is not None:
+                chunk_filter.append(Chunk.language == language)
+            conditions.append(select(Chunk.id).where(*chunk_filter).exists())
+
         statement = (
             select(ChunkEmbedding.chunk_id, distance.label("distance"))
-            .where(
-                ChunkEmbedding.workspace_id == self.workspace_id,
-                ChunkEmbedding.model == query.model,
-                ChunkEmbedding.model_version == query.model_version,
-            )
+            .where(*conditions)
             .order_by(distance)
             .limit(limit)
         )

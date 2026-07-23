@@ -27,7 +27,9 @@ target_metadata = Base.metadata
 # Indexes that live only in migrations (not in model metadata) because their
 # definitions do not round-trip through Alembic autogenerate. They are excluded
 # from comparison so `alembic check` does not report false drift.
-_AUTOGENERATE_IGNORED_INDEXES = frozenset({"ix_chunk_embeddings_embedding_cosine"})
+_AUTOGENERATE_IGNORED_INDEXES = frozenset(
+    {"ix_chunk_embeddings_embedding_cosine", "ix_chunks_content_fts"}
+)
 
 
 def _include_object(
