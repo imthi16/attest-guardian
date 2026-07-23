@@ -15,6 +15,7 @@ from app.auth.dependencies import SessionDep, get_app_settings
 from app.auth.permissions import WorkspaceAction
 from app.auth.workspace import RequireAction, WorkspaceContext
 from app.config import Settings
+from app.reranking.service import RerankService, build_reranker
 from app.retrieval.service import HybridRetrievalService, RetrievalConfig
 from app.retrieval.types import RetrievalFilters
 from app.schemas.retrieval import RetrievalRequest, RetrievalResponse
@@ -38,13 +39,21 @@ async def search(
         rrf_k=settings.retrieval_rrf_k,
         candidate_limit=settings.retrieval_candidate_limit,
         top_k=settings.retrieval_top_k,
+        rerank_enabled=settings.rerank_enabled,
+        rerank_candidate_limit=settings.rerank_candidate_limit,
     )
     # Clamp caller-supplied top_k to a safe maximum; never trust the request.
     top_k = None
     if payload.top_k is not None:
         top_k = min(payload.top_k, settings.retrieval_max_top_k)
 
-    service = HybridRetrievalService(session, config=config)
+    service = HybridRetrievalService(
+        session,
+        rerank_service=RerankService(build_reranker(settings), threshold=settings.rerank_threshold)
+        if settings.rerank_enabled
+        else None,
+        config=config,
+    )
     result = await service.search(
         workspace_id=context.workspace.id,
         query=payload.query,

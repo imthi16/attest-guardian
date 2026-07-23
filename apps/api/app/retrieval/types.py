@@ -47,6 +47,8 @@ class RetrievedChunk:
     language: str | None
     ocr_engine: str | None
     ocr_confidence: float | None
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,10 @@ class RetrievalTrace:
     lexical_ms: float = 0.0
     dense_ms: float = 0.0
     fusion_ms: float = 0.0
+    reranked: bool = False
+    rerank_model: str | None = None
+    rerank_ms: float = 0.0
+    rerank_dropped: int = 0
     fused_scores: list[float] = field(default_factory=list)
 
     def as_metadata(self) -> dict[str, object]:
@@ -100,10 +106,14 @@ class RetrievalTrace:
             "dense_count": self.dense_count,
             "fused_count": self.fused_count,
             "returned_count": self.returned_count,
+            "reranked": self.reranked,
+            "rerank_model": self.rerank_model,
+            "rerank_dropped": self.rerank_dropped,
             "timings_ms": {
                 "lexical": round(self.lexical_ms, 3),
                 "dense": round(self.dense_ms, 3),
                 "fusion": round(self.fusion_ms, 3),
+                "rerank": round(self.rerank_ms, 3),
             },
         }
 

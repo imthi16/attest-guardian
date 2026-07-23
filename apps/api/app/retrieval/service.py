@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +27,8 @@ from app.db.repositories.chunks import ChunkRepository, LexicalMatch
 from app.db.repositories.embeddings import ChunkEmbeddingRepository, VectorMatch
 from app.embeddings.service import EmbeddingService
 from app.language.processor import QueryProcessor, get_default_query_processor
+from app.reranking.service import RerankService
+from app.reranking.types import RerankItem
 from app.retrieval.fusion import DEFAULT_RRF_K, FusedCandidate, reciprocal_rank_fusion
 from app.retrieval.types import (
     RetrievalFilters,
@@ -44,6 +46,8 @@ class RetrievalConfig:
     rrf_k: int = DEFAULT_RRF_K
     candidate_limit: int = 50
     top_k: int = 10
+    rerank_enabled: bool = True
+    rerank_candidate_limit: int = 30
 
 
 class HybridRetrievalService:
@@ -55,12 +59,17 @@ class HybridRetrievalService:
         *,
         embedding_service: EmbeddingService | None = None,
         query_processor: QueryProcessor | None = None,
+        rerank_service: RerankService | None = None,
         config: RetrievalConfig | None = None,
     ) -> None:
         self._session = session
         self._embeddings = embedding_service or EmbeddingService()
         self._processor = query_processor or get_default_query_processor()
         self._config = config or RetrievalConfig()
+        # A reranker is optional; when disabled the fused order is returned.
+        self._reranker = rerank_service
+        if self._config.rerank_enabled and self._reranker is None:
+            self._reranker = RerankService()
 
     async def search(
         self,
@@ -70,10 +79,11 @@ class HybridRetrievalService:
         filters: RetrievalFilters | None = None,
         top_k: int | None = None,
     ) -> RetrievalResult:
-        """Retrieve fused, authorized evidence for a query in one workspace."""
+        """Retrieve fused, authorized, and (optionally) reranked evidence."""
         active_filters = filters or RetrievalFilters()
         resolved_top_k = top_k or self._config.top_k
         processed = self._processor.process(query)
+        reranking = self._config.rerank_enabled and self._reranker is not None
 
         trace = RetrievalTrace(
             workspace_id=workspace_id,
@@ -90,19 +100,66 @@ class HybridRetrievalService:
         )
         dense = await self._dense(workspace_id, processed.original, active_filters, trace)
 
+        # When reranking, fuse a larger pool so the reranker can promote a
+        # candidate the fusion ranked just outside top_k; otherwise fuse to
+        # exactly top_k.
+        fusion_limit = (
+            max(resolved_top_k, self._config.rerank_candidate_limit)
+            if reranking
+            else resolved_top_k
+        )
         fusion_start = time.perf_counter()
         fused = reciprocal_rank_fusion(
             {"lexical": lexical, "dense": dense},
             k=self._config.rrf_k,
-            limit=resolved_top_k,
+            limit=fusion_limit,
         )
         trace.fusion_ms = (time.perf_counter() - fusion_start) * 1000
         trace.fused_count = len(fused)
         trace.fused_scores = [round(item.score, 6) for item in fused]
 
         hydrated = await self._hydrate(workspace_id, fused)
+        if reranking:
+            hydrated = self._rerank(processed.original, hydrated, trace)
+        hydrated = hydrated[:resolved_top_k]
         trace.returned_count = len(hydrated)
         return RetrievalResult(chunks=hydrated, trace=trace)
+
+    def _rerank(
+        self,
+        query: str,
+        chunks: list[RetrievedChunk],
+        trace: RetrievalTrace,
+    ) -> list[RetrievedChunk]:
+        """Reorder hydrated chunks by reranker score, preserving provenance.
+
+        The reranker only sees chunk text that was already authorized and
+        hydrated, so reranking cannot widen the result set or leak data; it can
+        only reorder or drop below-threshold candidates.
+        """
+        assert self._reranker is not None  # noqa: S101 - guarded by caller
+        items = [RerankItem(chunk_id=chunk.chunk_id, text=chunk.content) for chunk in chunks]
+        outcome = self._reranker.rerank(query, items)
+
+        trace.reranked = not outcome.metrics.failed
+        trace.rerank_model = self._reranker.model
+        trace.rerank_ms = outcome.metrics.duration_ms
+        trace.rerank_dropped = outcome.result.dropped_below_threshold
+
+        by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        reordered: list[RetrievedChunk] = []
+        for ranked in outcome.result.items:
+            base = by_id.get(ranked.chunk_id)
+            if base is None:
+                continue
+            reordered.append(
+                replace(
+                    base,
+                    rerank_score=ranked.normalized_score,
+                    rerank_rank=ranked.rank,
+                )
+            )
+        return reordered
 
     async def _lexical(
         self,
