@@ -55,6 +55,15 @@ The committed `.env.example` contains non-secret local defaults only.
 | `RAG_MAX_EVIDENCE` | Max passages sent to generation (kept minimal) | `6` |
 | `RAG_MIN_EVIDENCE` | Passages required to clear the sufficiency gate, else abstain | `1` |
 | `RAG_MIN_EVIDENCE_SCORE` | Minimum fused score a passage needs to count as evidence | `0.0` |
+| `INJECTION_SCAN_ENABLED` | Scan chunks for prompt injection during ingestion | `true` |
+| `INJECTION_FLAG_SCORE` | Aggregate score (0-1) at which a chunk is flagged for review | `0.5` |
+| `INJECTION_QUARANTINE_SCORE` | Aggregate score (0-1) at which a chunk quarantines its document | `0.8` |
+| `INJECTION_QUARANTINE_ON_HIGH_SEVERITY` | Quarantine when any single high-severity signal fires | `true` |
+
+Injection thresholds are conservative by construction: a document is quarantined when *any* of its
+chunks crosses the quarantine bar, and quarantined content is excluded from retrieval as well as
+ingestion. Do not weaken these thresholds to make an evaluation pass; extend the corpus and improve
+detection instead (see [`services/safety/README.md`](../services/safety/README.md)).
 
 Known local secrets are rejected when `APP_ENV` is `staging` or `production`. Deployed secrets must
 come from a secret manager or protected environment configuration, never a checked-in file. Keep

@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Sequence
 
 from app.db.models.documents import EMBEDDING_DIMENSIONS, Chunk, ChunkEmbedding, DocumentVersion
+from app.db.models.enums import DocumentStatus
 from app.db.models.identity import User, Workspace
 from app.embeddings.types import EmbeddingVector
 from app.retrieval.service import HybridRetrievalService, RetrievalConfig
@@ -57,7 +58,7 @@ async def _seed_chunk(
     embedding: tuple[float, ...] | None = None,
     chunk_index: int = 0,
 ) -> Chunk:
-    document = await factories.make_document(session, workspace, owner)
+    document = await factories.make_document(session, workspace, owner, status=DocumentStatus.READY)
     version = await factories.make_version(session, document)
     chunk = Chunk(
         workspace_id=workspace.id,
