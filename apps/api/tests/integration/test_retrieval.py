@@ -184,6 +184,10 @@ async def test_dense_recall_returns_nearest_vector(db_session: AsyncSession) -> 
 async def test_hybrid_fusion_prefers_chunk_in_both_lists(db_session: AsyncSession) -> None:
     owner = await factories.make_user(db_session)
     workspace = await factories.make_workspace(db_session, owner)
+    # `both` matches lexically and has a matching embedding, so it appears in
+    # both ranked lists. `lexical_only` matches lexically but has no embedding,
+    # so it appears only in the lexical list. RRF must therefore rank `both`
+    # first, since its extra dense contribution can only add to its score.
     both = await _seed_chunk(
         db_session,
         workspace=workspace,
@@ -198,7 +202,6 @@ async def test_hybrid_fusion_prefers_chunk_in_both_lists(db_session: AsyncSessio
         owner=owner,
         content="quarterly revenue appendix",
         language="eng",
-        embedding=_dense_vector((1, 1.0)),
         chunk_index=1,
     )
 
@@ -206,7 +209,8 @@ async def test_hybrid_fusion_prefers_chunk_in_both_lists(db_session: AsyncSessio
         workspace_id=workspace.id, query="quarterly revenue"
     )
     assert result.chunks[0].chunk_id == both.id
-    assert both.id in _ids(result.chunks)
+    assert result.chunks[0].lexical_rank is not None
+    assert result.chunks[0].dense_rank == 1
     assert lexical_only.id in _ids(result.chunks)
 
 
