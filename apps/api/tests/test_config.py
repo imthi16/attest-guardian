@@ -26,6 +26,26 @@ def test_rag_pipeline_defaults_are_present() -> None:
     assert settings.rag_min_evidence_score == 0.0
 
 
+def test_injection_defaults_are_conservative() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.injection_scan_enabled is True
+    assert settings.injection_flag_score == 0.5
+    assert settings.injection_quarantine_score == 0.8
+    assert settings.injection_quarantine_on_high_severity is True
+
+
+def test_injection_thresholds_must_be_ordered() -> None:
+    with pytest.raises(ValidationError, match="INJECTION_FLAG_SCORE"):
+        Settings(
+            _env_file=None,
+            injection_flag_score=0.9,
+            injection_quarantine_score=0.5,
+        )
+    with pytest.raises(ValidationError, match="INJECTION_FLAG_SCORE"):
+        Settings(_env_file=None, injection_flag_score=0.0)
+
+
 @pytest.mark.parametrize("environment", ["staging", "production"])
 def test_deployed_environments_reject_local_secrets(environment: str) -> None:
     with pytest.raises(ValidationError, match="JWT_SECRET must be replaced"):

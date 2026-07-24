@@ -65,6 +65,28 @@ audit row; these (failed logins, rate-limit hits, oversized bodies, quota reject
 the `app.security` logger via `log_security_event`, which never records request bodies, credentials,
 tokens, or email addresses.
 
+## Prompt-injection defence
+
+Uploaded files, OCR output, and retrieved chunks are treated as **untrusted data**, never as
+instructions. `app/safety` detects instruction-like passages (direct overrides, system/role
+impersonation, exfiltration and tool-use requests, indirect "when you read this" triggers, and
+obfuscated or encoded payloads), scores them, and turns the result into an `allow` / `flag` /
+`quarantine` decision. Detection combines rule matching over normalized text (NFKC, homoglyph
+folding, zero-width stripping, and a de-spaced view) with structural heuristics and an optional
+replaceable classifier; a model's self-report is never trusted.
+
+Enforcement has two boundaries. During ingestion the worker scans every chunk **before
+persistence**: a quarantine verdict marks the document `QUARANTINED`, writes no chunk rows, records
+a `document.quarantined` audit event, and emits a privacy-safe `prompt_injection_quarantine`
+security event (counts, categories, and score only — never chunk text). As defence in depth, both
+retrievers only return chunks of a `READY` document, so quarantined content can never reach
+retrieval, reranking, generation, or citation even if it was quarantined after chunking.
+
+A versioned attack/benign corpus (`tests/injection_corpus.py`) drives recall/precision regression
+tests across English, Tamil, and Tanglish. Thresholds are conservative and must not be weakened to
+pass evaluations. See [`services/safety/README.md`](../services/safety/README.md) for detail and
+limitations.
+
 ## Automated scanning in CI
 
 - `gitleaks` — secret scanning across full git history.

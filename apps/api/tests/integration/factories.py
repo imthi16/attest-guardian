@@ -17,6 +17,7 @@ from app.db.models import (
     Workspace,
 )
 from app.db.models.documents import EMBEDDING_DIMENSIONS
+from app.db.models.enums import DocumentStatus
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -48,6 +49,8 @@ async def make_document(
     session: AsyncSession,
     workspace: Workspace,
     owner: User,
+    *,
+    status: DocumentStatus | None = None,
 ) -> Document:
     document = Document(
         workspace_id=workspace.id,
@@ -58,6 +61,8 @@ async def make_document(
         size_bytes=1024,
         sha256="a" * 64,
     )
+    if status is not None:
+        document.status = status
     session.add(document)
     await session.flush()
     return document

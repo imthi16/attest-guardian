@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 from app.db.models.documents import EMBEDDING_DIMENSIONS
+from app.db.models.enums import DocumentStatus
 from app.db.repositories.embeddings import ChunkEmbeddingRepository
 from app.embeddings import EmbeddingService, LocalHashingEmbeddingProvider
 from app.embeddings.types import EmbeddingVector
@@ -30,7 +31,7 @@ from tests.integration.factories import (
 async def _chunk_in_new_workspace(session: AsyncSession):  # type: ignore[no-untyped-def]
     owner = await make_user(session)
     workspace = await make_workspace(session, owner)
-    document = await make_document(session, workspace, owner)
+    document = await make_document(session, workspace, owner, status=DocumentStatus.READY)
     version = await make_version(session, document)
     chunk = await make_chunk(session, workspace, version)
     return workspace, chunk
@@ -148,7 +149,7 @@ async def test_upsert_rejects_missing_chunk(db_session: AsyncSession) -> None:
 async def test_cosine_search_ranks_nearest_first(db_session: AsyncSession) -> None:
     owner = await make_user(db_session)
     workspace = await make_workspace(db_session, owner)
-    document = await make_document(db_session, workspace, owner)
+    document = await make_document(db_session, workspace, owner, status=DocumentStatus.READY)
     version = await make_version(db_session, document)
     repo = ChunkEmbeddingRepository(db_session, workspace.id)
     service = EmbeddingService(LocalHashingEmbeddingProvider())

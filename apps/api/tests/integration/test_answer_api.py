@@ -15,6 +15,7 @@ import httpx
 import pytest
 from app.config import Settings
 from app.db.models.documents import Chunk
+from app.db.models.enums import DocumentStatus
 from app.db.models.identity import User, Workspace
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,7 +51,7 @@ async def _seed_chunk(
     language: str = "eng",
     chunk_index: int = 0,
 ) -> Chunk:
-    document = await factories.make_document(session, workspace, owner)
+    document = await factories.make_document(session, workspace, owner, status=DocumentStatus.READY)
     version = await factories.make_version(session, document)
     chunk = Chunk(
         workspace_id=workspace.id,
