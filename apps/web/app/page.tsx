@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { SystemState } from "../components/system-state";
 
 const capabilities = [
@@ -29,14 +27,6 @@ export default function HomePage() {
         </p>
         <p lang="ta" className="tamil-sample">
           ஆதாரத்துடன் பதில். ஆதாரம் இல்லையெனில் மறுப்பு.
-        </p>
-        <p className="hero-actions">
-          <Link className="primary-button" href="/login">
-            Sign in
-          </Link>{" "}
-          <Link className="secondary-button" href="/register">
-            Create account
-          </Link>
         </p>
       </section>
 

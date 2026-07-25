@@ -26,5 +26,3 @@ coverage-summary.json
 /models/
 /artifacts/
 .envrc
-.verify-pr19/
-.verify-pr19.log
