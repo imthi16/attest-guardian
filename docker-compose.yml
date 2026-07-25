@@ -122,6 +122,8 @@ services:
       context: ./apps/web
     environment:
       NEXT_TELEMETRY_DISABLED: "1"
+      # Server-side only: the browser never sees this origin.
+      API_INTERNAL_ORIGIN: http://api:8000
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
     depends_on:

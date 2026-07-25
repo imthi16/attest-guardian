@@ -9,6 +9,8 @@ The committed `.env.example` contains non-secret local defaults only.
 | `APP_VERSION` | API-reported application version | `0.1.0` |
 | `API_HOST`, `API_PORT` | API bind address and port | `0.0.0.0`, `8000` |
 | `API_DOCS_ENABLED` | Enables OpenAPI, Swagger UI, and ReDoc | `true` |
+| `API_INTERNAL_ORIGIN` | FastAPI origin the Next.js server calls; never sent to the browser | `http://127.0.0.1:8000` |
+| `NEXT_PUBLIC_API_ORIGIN` | Browser-visible API origin added to the web CSP `connect-src`; empty means same-origin | `` |
 | `DATABASE_URL` | Async PostgreSQL connection URL | Local PostgreSQL |
 | `REDIS_URL` | Queue/cache connection URL | Local Redis |
 | `S3_ENDPOINT` | S3-compatible endpoint | Local MinIO |
@@ -89,3 +91,19 @@ to the image the worker actually runs.
 
 Provider variables are placeholders until their dedicated features land. Empty `LLM_API_KEY`
 means no cloud provider is enabled; do not insert fake credentials.
+
+## Web session cookies
+
+The web client stores no configuration in the browser. Session state lives in three `httpOnly`
+cookies written by Next.js server code, whose lifetimes follow the API's token TTLs rather than
+separate variables:
+
+| Cookie | Contents | Lifetime source |
+| --- | --- | --- |
+| `ag_access` | Access token | `expires_in` from `POST /auth/login` (`ACCESS_TOKEN_TTL_SECONDS`) |
+| `ag_refresh` | Refresh token | 14 days, matching `REFRESH_TOKEN_TTL_SECONDS` |
+| `ag_workspace` | Active workspace id | 14 days; cleared on sign-out |
+
+`Secure` is set whenever `NODE_ENV=production`, so a TLS-terminated deployment needs no extra
+configuration. If `REFRESH_TOKEN_TTL_SECONDS` is shortened, the refresh cookie outlives the token
+only until the next API call, which then clears the session and redirects to sign-in.
