@@ -12,6 +12,14 @@ type Recorded = { value: string; options: Record<string, unknown> };
 
 const store = new Map<string, Recorded>();
 
+/**
+ * Next.js only permits cookie mutation inside a Server Action or Route Handler.
+ * During a page render `set` throws, so the mock must be able to reproduce that
+ * or a refresh triggered from a page looks fine in tests and breaks in
+ * production, which is exactly what happened before this flag existed.
+ */
+let cookiesAreReadOnly = false;
+
 vi.mock("next/headers", () => ({
   cookies: async () => ({
     get: (name: string) => {
@@ -19,6 +27,9 @@ vi.mock("next/headers", () => ({
       return entry === undefined ? undefined : { name, value: entry.value };
     },
     set: (name: string, value: string, options: Record<string, unknown>) => {
+      if (cookiesAreReadOnly) {
+        throw new Error("Cookies can only be modified in a Server Action or Route Handler.");
+      }
       store.set(name, { options, value });
     },
   }),
@@ -47,6 +58,7 @@ const payloadSchema = z.object({ id: z.string() });
 describe("session cookies", () => {
   beforeEach(() => {
     store.clear();
+    cookiesAreReadOnly = false;
     vi.restoreAllMocks();
   });
 
@@ -86,6 +98,7 @@ describe("session cookies", () => {
 describe("authorizedRequest", () => {
   beforeEach(() => {
     store.clear();
+    cookiesAreReadOnly = false;
     vi.restoreAllMocks();
   });
 
@@ -184,5 +197,52 @@ describe("authorizedRequest", () => {
     });
 
     expect(result).toMatchObject({ code: "insufficient_role", ok: false, status: 403 });
+  });
+
+  it("refreshes during a page render where cookies cannot be written", async () => {
+    // A page render gets a read-only cookie store. The rotation must still
+    // return the fresh token and retry, rather than throwing and rendering an
+    // error boundary; the new cookie lands on the next action or route handler.
+    seedSession();
+    cookiesAreReadOnly = true;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(unauthorized())
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          access_token: "fresh-access",
+          refresh_token: "rotated-refresh",
+          token_type: "bearer",
+          expires_in: 900,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(200, { id: "workspace-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await authorizedRequest({ path: "/workspaces/1", schema: payloadSchema });
+
+    expect(result).toEqual({ data: { id: "workspace-1" }, ok: true });
+    const retryInit = fetchMock.mock.calls[2][1] as RequestInit;
+    expect((retryInit.headers as Record<string, string>).Authorization).toBe("Bearer fresh-access");
+  });
+
+  it("reports an expired session during a page render when refresh fails", async () => {
+    seedSession();
+    cookiesAreReadOnly = true;
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(unauthorized())
+        .mockResolvedValueOnce(
+          jsonResponse(401, {
+            detail: { code: "invalid_refresh_token", message: "The refresh token is invalid." },
+          }),
+        ),
+    );
+
+    const result = await authorizedRequest({ path: "/workspaces/1", schema: payloadSchema });
+
+    expect(result).toMatchObject({ code: "session_expired", ok: false, status: 401 });
   });
 });
