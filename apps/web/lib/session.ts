@@ -38,6 +38,26 @@ function cookieOptions(maxAge: number) {
 
 export type SessionTokens = Readonly<{ accessToken: string; refreshToken: string }>;
 
+/**
+ * Persist tokens when the caller may write cookies.
+ *
+ * Next.js only allows cookie mutation inside a Server Action or Route Handler;
+ * during a page render the store is read-only and `set` throws. A rotation
+ * triggered by a page render must therefore still be usable, so the write is
+ * best-effort and the caller proceeds with the token it was given. The cookie
+ * is then refreshed on the next action or route-handler request, and until then
+ * the stale access cookie simply triggers another rotation. Returning `false`
+ * lets callers distinguish "not persisted" from "failed".
+ */
+async function tryWriteCookies(mutate: (store: CookieStore) => void): Promise<boolean> {
+  try {
+    mutate(await cookies());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function setTokens(store: CookieStore, tokens: SessionTokens, expiresInSeconds: number): void {
   store.set(ACCESS_COOKIE, tokens.accessToken, cookieOptions(expiresInSeconds));
   store.set(REFRESH_COOKIE, tokens.refreshToken, cookieOptions(REFRESH_MAX_AGE_SECONDS));
@@ -56,7 +76,7 @@ export async function writeSession(tokens: SessionTokens, expiresInSeconds: numb
 
 /** Remove every session cookie, including the remembered workspace. */
 export async function clearSession(): Promise<void> {
-  deleteTokens(await cookies());
+  await tryWriteCookies(deleteTokens);
 }
 
 export async function readSession(): Promise<SessionTokens | null> {
@@ -86,15 +106,16 @@ async function rotateTokens(refreshToken: string): Promise<string | null> {
     path: "/auth/refresh",
     schema: tokenPairSchema,
   });
-  const store = await cookies();
   if (!refreshed.ok) {
-    deleteTokens(store);
+    await tryWriteCookies(deleteTokens);
     return null;
   }
-  setTokens(
-    store,
-    { accessToken: refreshed.data.access_token, refreshToken: refreshed.data.refresh_token },
-    refreshed.data.expires_in,
+  await tryWriteCookies((store) =>
+    setTokens(
+      store,
+      { accessToken: refreshed.data.access_token, refreshToken: refreshed.data.refresh_token },
+      refreshed.data.expires_in,
+    ),
   );
   return refreshed.data.access_token;
 }
