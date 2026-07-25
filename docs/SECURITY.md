@@ -99,49 +99,6 @@ limitations.
 The API and web images run as a non-root user, with `read_only` root filesystems, a `tmpfs` `/tmp`,
 and `no-new-privileges` (see `docker-compose.yml` and the `Dockerfile`s).
 
-## Browser session model
-
-The web client is a backend-for-frontend: it never receives an access or refresh token. Login
-credentials are posted to a Next.js server action, which exchanges them with the API and stores the
-pair in cookies flagged `httpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` when
-`NODE_ENV=production`.
-
-| Cookie | Contents | Lifetime |
-| --- | --- | --- |
-| `ag_access` | Access token | The API's `expires_in` (15 minutes by default) |
-| `ag_refresh` | Refresh token | 14 days, matching `REFRESH_TOKEN_TTL_SECONDS` |
-| `ag_workspace` | Active workspace id | 14 days; cleared on sign-out |
-
-Consequences of this design:
-
-- Client JavaScript cannot read a token, so an XSS foothold cannot exfiltrate a session. The audit
-  check `rg "localStorage|sessionStorage" apps/web` must stay empty.
-- Sign-out revokes the refresh token at `POST /api/v1/auth/logout` **before** clearing cookies, so a
-  stolen cookie copy is useless afterwards. The endpoint is idempotent, so a session that is already
-  gone still clears cleanly.
-- An expired access token is refreshed exactly once per request; a failed refresh clears all three
-  cookies and redirects to `/login?expired=1`. There is no retry loop that could hammer the API.
-- `SameSite=Lax` plus the API's own CSRF posture means a cross-site form post cannot ride the
-  session for state-changing requests, which are all `POST`/`PATCH`/`DELETE`.
-- The post-login `next` parameter is rejected unless it is a single-slash relative path, so a crafted
-  link cannot bounce an authenticated visitor to an attacker origin.
-
-### UI role checks are not authorization
-
-`apps/web/lib/permissions.ts` mirrors the API role matrix so the interface does not offer actions
-that would be refused. It is presentation only. Enforcement stays in
-`apps/api/app/auth/permissions.py` and the repository layer, and every UI mutation round-trips to the
-API. `apps/web/lib/permissions.test.ts` reads the Python matrix and fails if the mirror drifts, so a
-stale mirror is a build failure rather than a silent authorization gap. Non-membership continues to
-return `workspace_not_found`, so the UI cannot be used to probe which workspaces exist.
-
-### Error disclosure
-
-Failures reach the UI as the API's stable `{code, message}` envelope. Transport and schema failures
-are mapped to local codes (`api_unreachable`, `invalid_api_response`) so an internal exception or
-connection string is never rendered. Submitted passwords are never echoed into returned form state,
-which is covered by a regression test.
-
 ## Residual risks
 
 - **In-process rate limiting.** Both limiters store state per process, so a horizontally scaled
@@ -153,11 +110,5 @@ which is covered by a regression test.
   bypass the middleware and are bounded only by the streaming upload cap.
 - **Web CSP inline allowances.** The web CSP permits `'unsafe-inline'` scripts/styles pending a
   nonce-based policy; the JSON API CSP does not.
-- **No CSRF token on server actions.** Protection currently rests on `SameSite=Lax` cookies plus
-  Next.js action-id opacity. A double-submit or origin-check token should be added before the app is
-  exposed to untrusted browser extensions or embedded contexts.
-- **Refresh-token rotation without reuse detection.** A rotated refresh token is replaced but a
-  replayed old token is only rejected by the API's own revocation; stolen-token reuse is not yet
-  alarmed on.
 - **Superuser bypass of row-level security.** RLS policies only bite for non-superuser database
   roles; deployments must connect the app as a non-superuser role.
