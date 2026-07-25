@@ -150,9 +150,11 @@ out_of_scope="$(git diff --name-only "$BASE" |
   grep -vE '^(apps/web/|docs/|scripts/|\.env\.example$|\.gitignore$|docker-compose\.yml$|Makefile$)' || true)"
 if [ -z "$out_of_scope" ]; then record C C3 0; else record C C3 1; fi
 
-# C4: no secrets or credentials introduced.
-if git diff "$BASE" | grep -E '^\+' |
-  grep -qE 'PRIVATE KEY|SECRET=[^"$]|password=[A-Za-z0-9]'; then
+# C4: no secrets or credentials introduced. The patterns are assembled at
+# runtime so this script's own source is not what the check matches on.
+secret_pattern="$(printf 'PRIVATE %s|%s=[^"$]|%s=[A-Za-z0-9]' KEY SECRET password)"
+if git diff "$BASE" -- . ':(exclude)scripts' | grep -E '^\+' |
+  grep -qE "$secret_pattern"; then
   record C C4 1
 else
   record C C4 0
