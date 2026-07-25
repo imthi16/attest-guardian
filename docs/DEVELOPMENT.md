@@ -134,3 +134,31 @@ evaluation cases for retrieval, model, prompt, or verification changes.
 Create one issue and one branch per reviewable feature, for example `feat/project-foundation`.
 Use Conventional Commits such as `feat: add versioned health routes`. Review `git diff` before
 staging, target `main`, complete every PR template section, and never merge automatically.
+
+## Viewing the UI without Docker
+
+The real stack needs PostgreSQL, Redis, and MinIO (`make infra-up && make dev-api`).
+On a machine without Docker access, `make demo-api` runs an in-memory stand-in on
+port 8000 that implements the same auth and workspace contracts, including the
+stable error envelope and the role matrix, so the client behaves as it does
+against the real service:
+
+```sh
+make demo-api            # terminal 1: stand-in API on :8000
+make dev-web             # terminal 2: Next.js on :3000
+```
+
+Seeded accounts, all with password `demo-password-1`:
+
+| Email | Role in "Tamil Nadu Compliance" |
+| --- | --- |
+| `ravi@example.com` | Owner |
+| `priya@example.com` | Admin |
+| `arun@example.com` | Member |
+| `meena@example.com` | Viewer |
+
+Signing in as each shows how navigation and member controls change with role.
+The stand-in is for local viewing only: state is a process-local dict, passwords
+are compared in plaintext, and tokens are counters. It must never be deployed,
+and it is not a substitute for the integration tests, which run against the real
+services in CI.
