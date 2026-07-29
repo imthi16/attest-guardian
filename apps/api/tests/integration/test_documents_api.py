@@ -695,7 +695,7 @@ async def test_retryable_reflects_the_callers_own_capability(
     owner = await make_account(client, "owner@example.com")
     viewer = await make_account(client, "viewer@example.com")
     workspace_id = await make_workspace(client, owner)
-    await add_member(client, workspace_id, owner, viewer, "viewer")
+    await add_member(client, owner, workspace_id, viewer, "viewer")
     document_id = (await upload(client, owner, workspace_id)).json()["id"]
     base = f"/api/v1/workspaces/{workspace_id}/documents"
 
@@ -718,7 +718,7 @@ async def test_upload_policy_reports_the_deployed_limits(client: httpx.AsyncClie
     owner = await make_account(client, "owner@example.com")
     viewer = await make_account(client, "viewer@example.com")
     workspace_id = await make_workspace(client, owner)
-    await add_member(client, workspace_id, owner, viewer, "viewer")
+    await add_member(client, owner, workspace_id, viewer, "viewer")
 
     # Readable by any member: a viewer never uploads, but the same page renders
     # the limits, and a 403 there would be a confusing way to say "read only".
