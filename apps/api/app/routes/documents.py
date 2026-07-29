@@ -1,24 +1,37 @@
 """Document endpoints under `/api/v1/workspaces/{workspace_id}/documents`.
 
-Uploads require the `UPLOAD_DOCUMENTS` capability; reads require `VIEW`.
-Every route runs inside the workspace context, so membership is proven and
-row-level security is bound before any tenant data moves. Downloads are
-time-limited presigned URLs — the bucket is never publicly readable.
+Reads require `VIEW`; uploading and retrying a failed ingestion require
+`UPLOAD_DOCUMENTS`; archiving, restoring, and deleting require
+`MANAGE_DOCUMENTS` because they withdraw or destroy evidence. Every route runs
+inside the workspace context, so membership is proven and row-level security
+is bound before any tenant data moves. Downloads are time-limited presigned
+URLs — the bucket is never publicly readable.
 """
 
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, UploadFile, status
+from fastapi import APIRouter, Depends, Request, Response, UploadFile, status
 
 from app.auth import errors
 from app.auth.dependencies import SessionDep, get_app_settings
 from app.auth.permissions import WorkspaceAction
 from app.auth.workspace import RequireAction, WorkspaceContext
 from app.config import Settings
+from app.db.models.enums import DocumentStatus
 from app.db.repositories.audit import AuditLogRepository
 from app.db.repositories.documents import DocumentRepository, DocumentVersionRepository
 from app.db.repositories.ingestion import IngestionJobRepository
+from app.documents.lifecycle import (
+    DeleteRequiresArchiveError,
+    DocumentArchivedError,
+    DocumentNotFoundError,
+    DocumentNotRetryableError,
+    archive_document,
+    delete_document,
+    restore_document,
+    retry_ingestion,
+)
 from app.documents.service import (
     DuplicateDocumentError,
     FileTooLargeError,
@@ -41,6 +54,10 @@ ViewerContext = Annotated[WorkspaceContext, Depends(RequireAction(WorkspaceActio
 UploaderContext = Annotated[
     WorkspaceContext,
     Depends(RequireAction(WorkspaceAction.UPLOAD_DOCUMENTS)),
+]
+ManagerContext = Annotated[
+    WorkspaceContext,
+    Depends(RequireAction(WorkspaceAction.MANAGE_DOCUMENTS)),
 ]
 
 
@@ -106,8 +123,14 @@ async def upload_document(
 
 
 @router.get("", response_model=list[DocumentResponse])
-async def list_documents(context: ViewerContext, session: SessionDep) -> list[DocumentResponse]:
-    documents = await DocumentRepository(session, context.workspace.id).list_ordered()
+async def list_documents(
+    context: ViewerContext,
+    session: SessionDep,
+    include_archived: bool = False,
+) -> list[DocumentResponse]:
+    documents = await DocumentRepository(session, context.workspace.id).list_ordered(
+        include_archived=include_archived
+    )
     return [DocumentResponse.model_validate(document) for document in documents]
 
 
@@ -143,6 +166,8 @@ async def document_progress(
         attempts=job.attempts if job else 0,
         error=job.error if job else None,
         updated_at=job.updated_at if job else document.updated_at,
+        archived=document.archived_at is not None,
+        retryable=document.archived_at is None and document.status is DocumentStatus.FAILED,
     )
 
 
@@ -173,3 +198,98 @@ async def download_document(
         detail={"version_number": latest.version_number},
     )
     return DownloadLinkResponse(url=url, expires_in_seconds=settings.download_url_ttl_seconds)
+
+
+@router.post("/{document_id}/archive", response_model=DocumentResponse)
+async def archive(
+    document_id: uuid.UUID,
+    context: ManagerContext,
+    session: SessionDep,
+) -> DocumentResponse:
+    """Withdraw a document from evidence; reversible via `/restore`."""
+    try:
+        document = await archive_document(
+            session=session,
+            workspace_id=context.workspace.id,
+            actor_id=context.user.id,
+            document_id=document_id,
+        )
+    except DocumentNotFoundError:
+        raise errors.document_not_found() from None
+    return DocumentResponse.model_validate(document)
+
+
+@router.post("/{document_id}/restore", response_model=DocumentResponse)
+async def restore(
+    document_id: uuid.UUID,
+    context: ManagerContext,
+    session: SessionDep,
+) -> DocumentResponse:
+    try:
+        document = await restore_document(
+            session=session,
+            workspace_id=context.workspace.id,
+            actor_id=context.user.id,
+            document_id=document_id,
+        )
+    except DocumentNotFoundError:
+        raise errors.document_not_found() from None
+    return DocumentResponse.model_validate(document)
+
+
+@router.post("/{document_id}/retry", response_model=DocumentProgressResponse)
+async def retry(
+    document_id: uuid.UUID,
+    context: UploaderContext,
+    session: SessionDep,
+    queue: QueueDep,
+) -> DocumentProgressResponse:
+    """Queue a fresh ingestion run for a failed document."""
+    try:
+        job = await retry_ingestion(
+            session=session,
+            queue=queue,
+            workspace_id=context.workspace.id,
+            actor_id=context.user.id,
+            document_id=document_id,
+        )
+    except DocumentNotFoundError:
+        raise errors.document_not_found() from None
+    except DocumentArchivedError:
+        raise errors.document_archived() from None
+    except DocumentNotRetryableError:
+        raise errors.document_not_retryable() from None
+    return DocumentProgressResponse(
+        document_id=job.document_id,
+        status=DocumentStatus.PENDING,
+        job_status=job.status,
+        stage=job.stage,
+        attempts=job.attempts,
+        error=None,
+        updated_at=job.updated_at,
+        archived=False,
+        retryable=False,
+    )
+
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete(
+    document_id: uuid.UUID,
+    context: ManagerContext,
+    session: SessionDep,
+    storage: StorageDep,
+) -> Response:
+    """Permanently delete an archived document, its rows, and its bytes."""
+    try:
+        await delete_document(
+            session=session,
+            storage=storage,
+            workspace_id=context.workspace.id,
+            actor_id=context.user.id,
+            document_id=document_id,
+        )
+    except DocumentNotFoundError:
+        raise errors.document_not_found() from None
+    except DeleteRequiresArchiveError:
+        raise errors.document_delete_requires_archive() from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

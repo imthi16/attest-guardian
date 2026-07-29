@@ -265,3 +265,86 @@ Loading (`loading.tsx` with `aria-live="polite"`), empty, error, and refusal sta
 components rather than a shared blank fallback, matching the product rule that an uncertain outcome
 must look uncertain. `AccessNotice` renders `insufficient_role`, `cannot_manage_role`,
 `workspace_not_found`, and `rate_limited` with guidance and the stable code.
+
+## Document management UI
+
+The document library is the first place a reviewer sees the ingestion pipeline's own state, so the
+guiding rule is that a document which cannot be cited must never look like one that can. Every
+`DocumentStatus` has explicit wording in `components/ingestion-state.tsx`, and the badge shown in the
+list is the same source of truth as the explanation on the detail page.
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending: upload accepted
+  pending --> processing: worker claims the job
+  processing --> ready: all stages committed
+  processing --> failed: transient errors exhausted
+  processing --> quarantined: scanner or injection verdict
+  failed --> pending: retry (POST /retry)
+  ready --> archived: archive (POST /archive)
+  archived --> ready: restore (POST /restore)
+  archived --> [*]: delete (DELETE, purges bytes)
+  quarantined --> [*]: delete (never retried)
+```
+
+### Archival is an evidence boundary, not a UI filter
+
+`documents.archived_at` is a nullable timestamp kept separate from `status`, because status records
+the ingestion outcome and must not be rewritten — an archived document stays `READY` with its
+provenance intact, so restoring it needs no reprocessing. Eligibility for evidence is one predicate,
+`evidence_eligible()` in `apps/api/app/db/models/documents.py`, used by all four retrieval gates:
+lexical candidate generation, dense candidate generation, hydration, and citation provenance
+resolution. Archiving therefore stops answers immediately rather than merely hiding rows in a list;
+`tests/integration/test_retrieval.py` pins that end to end, including the race where a candidate was
+selected before the archival.
+
+Quota accounting deliberately still counts archived documents: their bytes remain stored until the
+document is deleted, so letting archival free quota would let a workspace exceed its limit.
+
+### Permissions
+
+| Action | Capability | Roles |
+| --- | --- | --- |
+| List, view, download | `VIEW` | all members |
+| Upload, retry a failed ingestion | `UPLOAD_DOCUMENTS` | owner, admin, member |
+| Archive, restore, delete | `MANAGE_DOCUMENTS` | owner, admin |
+
+Retrying only reprocesses bytes the workspace already accepted, so it follows the upload capability.
+Archiving, restoring, and deleting withdraw or destroy evidence, so they are reserved for owners and
+admins. `MANAGE_DOCUMENTS` is a new `WorkspaceAction`; `apps/web/lib/permissions.test.ts` now
+enumerates the Python action enum, so a capability added to the API without a mirror fails the build.
+
+### Reprocessing and deletion rules
+
+- **Retry** requires `status == FAILED` and an unarchived document. A quarantined document is never
+  reprocessed on request — the verdict is terminal, and retrying would hand rejected content back to
+  the pipeline. A pending, processing, or ready document has nothing to retry and a second run would
+  race the first over the same rows. The failed job row is kept and a new `QUEUED` job is inserted,
+  so failure history survives and the worker's compare-and-set claim still sees a clean row.
+- **Delete** requires the document to be archived first. That state is reversible and has already
+  removed the document from evidence, so nothing is destroyed on the strength of one click. Rows are
+  deleted before the stored objects, so a storage failure rolls the request back rather than leaving
+  a downloadable document whose bytes are gone; uploads create exactly one version today, so the
+  purge is a single object and cannot half-succeed.
+
+### Upload and download paths
+
+Two Next.js route handlers exist because a server action is the wrong shape for both:
+
+| Path | Why not a server action |
+| --- | --- |
+| `POST /api/workspaces/[id]/documents` | Only `XMLHttpRequest` reports how much of a request body has been sent, and byte-level progress is the point for a 20 MB scan |
+| `GET /api/workspaces/[id]/documents/[docId]/download` | The presigned URL must be reached by a link navigation; `form-action 'self'` in the CSP would refuse a form redirect to the storage origin, and a link also works without client JavaScript |
+
+Both are relays, not authorization points: they exchange the `httpOnly` session cookie for a bearer
+token server side and let the API decide. The upload relay forwards only the file part, so no
+client-chosen metadata reaches tenant storage, and the presigned URL is minted at click time and
+never rendered into HTML.
+
+### Untrusted content
+
+Filenames, titles, and worker error strings all originate in uploaded files. They are rendered as
+text children only — the app contains no `dangerouslySetInnerHTML` — and no page previews document
+contents: the file's text reaches a reader solely as cited evidence. Regression tests assert that a
+filename or ingestion error containing markup produces no element, and that the detail page renders
+no `iframe`, `object`, `embed`, or `img`.

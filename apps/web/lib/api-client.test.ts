@@ -143,4 +143,27 @@ describe("apiRequest", () => {
 
     expect(result).toMatchObject({ code: "invalid_api_response", ok: false });
   });
+
+  it("forwards a multipart body without overriding its boundary", async () => {
+    // Setting `Content-Type: application/json` on a FormData body — or setting
+    // multipart without the generated boundary — makes the upload unparsable at
+    // the API, so the header must be left to fetch.
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, { url: "u", expires_in: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const form = new FormData();
+    form.set("file", new File(["%PDF-"], "lease.pdf", { type: "application/pdf" }));
+
+    await apiRequest({
+      accessToken: "access-token",
+      body: form,
+      method: "POST",
+      path: "/workspaces/w/documents",
+      schema: z.unknown(),
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.body).toBe(form);
+    expect(init.headers["Content-Type"]).toBeUndefined();
+    expect(init.headers.Authorization).toBe("Bearer access-token");
+  });
 });

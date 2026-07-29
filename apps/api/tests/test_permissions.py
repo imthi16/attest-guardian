@@ -8,6 +8,7 @@ FULL = {
     WorkspaceAction.VIEW,
     WorkspaceAction.QUERY,
     WorkspaceAction.UPLOAD_DOCUMENTS,
+    WorkspaceAction.MANAGE_DOCUMENTS,
     WorkspaceAction.MANAGE_MEMBERS,
 }
 

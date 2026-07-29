@@ -135,6 +135,41 @@ API. `apps/web/lib/permissions.test.ts` reads the Python matrix and fails if the
 stale mirror is a build failure rather than a silent authorization gap. Non-membership continues to
 return `workspace_not_found`, so the UI cannot be used to probe which workspaces exist.
 
+### Document lifecycle exposure
+
+The document library adds four state-changing endpoints, all inside the workspace context so
+membership is proven and row-level security is bound before any tenant row moves:
+
+| Endpoint | Capability | Notes |
+| --- | --- | --- |
+| `POST .../documents/{id}/archive` | `MANAGE_DOCUMENTS` | Reversible; audited as `document.archived` |
+| `POST .../documents/{id}/restore` | `MANAGE_DOCUMENTS` | Audited as `document.restored` |
+| `POST .../documents/{id}/retry` | `UPLOAD_DOCUMENTS` | Refused unless `status == FAILED`; never for a quarantined document |
+| `DELETE .../documents/{id}` | `MANAGE_DOCUMENTS` | Refused unless already archived; purges rows and stored bytes; audited as `document.deleted` |
+
+Security-relevant properties:
+
+- **Quarantine stays terminal.** A quarantined document cannot be reprocessed through the API at
+  all, so a scanner or prompt-injection verdict cannot be undone by a caller with upload rights.
+- **Archival removes evidence, not just rows in a list.** `evidence_eligible()` gates lexical
+  retrieval, dense retrieval, hydration, and citation resolution, so an archived document stops
+  contributing to answers immediately.
+- **Deletion is two-step and audited.** The audit row is written before the document row is deleted
+  and survives it, because audit rows reference resources by id rather than by foreign key.
+- **Non-members still learn nothing.** Every lifecycle route answers `workspace_not_found` for a
+  non-member and `document_not_found` for another tenant's document id.
+
+### Upload and download relays
+
+`POST /api/workspaces/[id]/documents` and `GET /api/workspaces/[id]/documents/[docId]/download` are
+Next.js route handlers that exchange the `httpOnly` session cookie for a bearer token server side.
+They are relays and never soften an API decision; regression tests pin that a 403 or 401 from the API
+is passed through unchanged. The upload relay forwards only the `file` part, so no client-supplied
+title or metadata becomes tenant content, and it rejects a body over `MAX_UPLOAD_BYTES` before
+relaying it. Presigned download URLs are minted per click, carry `Cache-Control: no-store`, and are
+never rendered into HTML, so they cannot be scraped from a page or survive in a cache. Cross-site
+requests cannot drive either handler because `SameSite=Lax` withholds the session cookie.
+
 ### Error disclosure
 
 Failures reach the UI as the API's stable `{code, message}` envelope. Transport and schema failures
@@ -161,3 +196,10 @@ which is covered by a regression test.
   alarmed on.
 - **Superuser bypass of row-level security.** RLS policies only bite for non-superuser database
   roles; deployments must connect the app as a non-superuser role.
+- **Buffered upload relay.** The web upload route reads the whole multipart body into memory
+  before forwarding it, bounded by `MAX_UPLOAD_BYTES` (25 MiB) per request. Concurrent uploads
+  therefore consume memory in the Next.js process; streaming the body through is the fix if that
+  becomes a scaling limit.
+- **Deleted bytes are not shredded.** Permanent deletion removes the object from the bucket, but
+  storage-level retention, versioning, or backups may still hold a copy. A documented retention
+  and shredding workflow is Phase 6 work.

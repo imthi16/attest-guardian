@@ -105,8 +105,16 @@ Repository layout and intended ownership per directory:
   repository scoping. Document uploads (`app/documents/`, `app/routes/documents.py`) validate
   filename/extension/declared-MIME/content-magic before any byte reaches storage, dedupe by
   SHA-256 per workspace, and store via the `ObjectStorage` interface (`app/storage/`,
-  S3/MinIO impl); downloads are presigned URLs. Storage integration tests need the
-  `make infra-up` MinIO and use a separate `attest-test-documents` bucket. Ingestion
+  S3/MinIO impl); downloads are presigned URLs. Post-upload lifecycle lives in
+  `app/documents/lifecycle.py`: archive/restore are a reversible `documents.archived_at`
+  timestamp (never a `status` rewrite) gated by the new `MANAGE_DOCUMENTS` capability;
+  retry (`UPLOAD_DOCUMENTS`) inserts a *new* `QUEUED` job only for a `FAILED` document —
+  quarantine is terminal and is never reprocessed; permanent delete is refused unless the
+  document is already archived. Evidence eligibility is one predicate,
+  `evidence_eligible()` in `app/db/models/documents.py` (READY **and** not archived), and
+  every retrieval gate must use it — lexical, dense, hydration, and citation provenance —
+  so archiving stops answers rather than only hiding list rows. Storage integration tests
+  need the `make infra-up` MinIO and use a separate `attest-test-documents` bucket. Ingestion
   (`app/ingestion/`): uploads enqueue `{job_id, workspace_id}` on a Redis list; the worker
   (`make dev-worker`, `python -m app.ingestion.worker`) claims jobs by compare-and-set (duplicate
   delivery safe), walks stage enums committed per transition, retries transient failures, and
@@ -122,7 +130,16 @@ Repository layout and intended ownership per directory:
   `validate_chunk_provenance` gates persistence — a provenance failure aborts the job.
   Tables are atomic, chunks never span pages, and the section hierarchy carries across pages.
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
-  (`--max-warnings=0`).
+  (`--max-warnings=0`). Backend-for-frontend: tokens live only in `httpOnly` cookies and all
+  API calls run in server code (`lib/api-client.ts` → `lib/session.ts` → `lib/attest-api.ts`,
+  responses parsed by `lib/contracts.ts` Zod schemas). `lib/permissions.ts` and
+  `lib/upload-rules.ts` are advisory mirrors of the API's role matrix and upload validator —
+  their tests read the Python sources and fail the build on drift, so never let them diverge.
+  Mutations are server actions (`app/*-actions.ts`); the only route handlers are
+  `app/api/workspaces/[workspaceId]/documents/**` (upload needs XHR byte progress, download
+  needs a link navigation because the CSP sets `form-action 'self'`). Uploaded filenames,
+  titles, and worker error strings are untrusted: render them as text children only, never
+  preview document contents, and keep `dangerouslySetInnerHTML` out of the app.
 - `services/` — planned boundaries for `ingestion`, `retrieval`, `verification`, `safety`, kept as
   separate services rather than folded into `apps/api` so each enforces its own authorization and
   input-trust boundary.

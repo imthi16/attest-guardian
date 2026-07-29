@@ -7,22 +7,26 @@ without joins; it must always equal the owning document's workspace.
 """
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    and_,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceOwnedModel
 from app.db.models.enums import DocumentStatus, pg_enum
@@ -51,6 +55,11 @@ class Document(WorkspaceOwnedModel):
         pg_enum(DocumentStatus, "document_status"),
         default=DocumentStatus.PENDING,
     )
+    # Archiving is a reversible withdrawal from evidence, kept separate from
+    # `status` because status describes the ingestion outcome and must not be
+    # rewritten: an archived document stays READY and its provenance intact,
+    # so restoring it needs no reprocessing.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     workspace: Mapped["Workspace"] = relationship(back_populates="documents")
     versions: Mapped[list["DocumentVersion"]] = relationship(
@@ -58,6 +67,18 @@ class Document(WorkspaceOwnedModel):
         cascade="all, delete-orphan",
         order_by="DocumentVersion.version_number",
     )
+
+
+def evidence_eligible() -> ColumnElement[bool]:
+    """SQL predicate for documents whose chunks may be used as evidence.
+
+    One definition for every retrieval gate: a document contributes evidence
+    only while ingestion succeeded (`READY`) and it has not been archived.
+    Both halves matter — chunks are committed stage by stage, so a later
+    quarantine can leave rows behind, and an archived document must stop
+    answering questions the moment it is withdrawn.
+    """
+    return and_(Document.status == DocumentStatus.READY, Document.archived_at.is_(None))
 
 
 class DocumentVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):

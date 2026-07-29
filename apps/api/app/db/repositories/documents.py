@@ -45,13 +45,18 @@ class DocumentRepository(WorkspaceScopedRepository[Document]):
         result = await self._session.scalars(statement)
         return result.first()
 
-    async def list_ordered(self) -> Sequence[Document]:
-        statement = (
-            select(Document)
-            .where(Document.workspace_id == self.workspace_id)
-            .order_by(Document.created_at.desc())
-        )
-        result = await self._session.scalars(statement)
+    async def list_ordered(self, *, include_archived: bool = False) -> Sequence[Document]:
+        """Newest first. Archived documents are excluded unless asked for.
+
+        Quota counting deliberately still includes archived documents: their
+        bytes remain stored until the document is deleted permanently, so
+        letting archival free quota would let a workspace store more than it
+        is allowed.
+        """
+        statement = select(Document).where(Document.workspace_id == self.workspace_id)
+        if not include_archived:
+            statement = statement.where(Document.archived_at.is_(None))
+        result = await self._session.scalars(statement.order_by(Document.created_at.desc()))
         return result.all()
 
 
@@ -59,6 +64,16 @@ class DocumentVersionRepository(Repository[DocumentVersion]):
     """Versions are reached through their (workspace-checked) document."""
 
     model = DocumentVersion
+
+    async def list_for_document(self, document_id: uuid.UUID) -> Sequence[DocumentVersion]:
+        """Every stored version, oldest first (used when purging content)."""
+        statement = (
+            select(DocumentVersion)
+            .where(DocumentVersion.document_id == document_id)
+            .order_by(DocumentVersion.version_number)
+        )
+        result = await self._session.scalars(statement)
+        return result.all()
 
     async def get_latest_for_document(self, document_id: uuid.UUID) -> DocumentVersion | None:
         statement = (

@@ -5,6 +5,11 @@ about it instead of comparing roles ad hoc. `VIEWER` is the read-only
 reviewer role: it can see the workspace and query evidence but changes
 nothing. Member management is deliberately asymmetric: admins run the
 day-to-day roster but cannot touch or mint privileged roles.
+
+Document lifecycle is split in two: uploading (and retrying a failed
+ingestion, which only reprocesses bytes already accepted) is day-to-day
+member work, while archiving, restoring, and deleting withdraw or destroy
+evidence and are therefore reserved for owners and admins.
 """
 
 import enum
@@ -18,6 +23,7 @@ class WorkspaceAction(enum.Enum):
     VIEW = "view"
     QUERY = "query"
     UPLOAD_DOCUMENTS = "upload_documents"
+    MANAGE_DOCUMENTS = "manage_documents"
     MANAGE_MEMBERS = "manage_members"
 
 

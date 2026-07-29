@@ -14,9 +14,12 @@ from typing import Any
 import httpx
 import pytest
 from app.config import Settings
-from app.db.models.operations import AuditLog
+from app.db.models.documents import Document, DocumentVersion
+from app.db.models.enums import DocumentStatus
+from app.db.models.operations import AuditLog, IngestionJob
 from app.storage.s3 import S3ObjectStorage
-from sqlalchemy import select
+from botocore.exceptions import ClientError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.integration.apptools import Account, build_client, make_account
@@ -95,6 +98,33 @@ async def upload(
 def error_code(response: httpx.Response) -> str:
     code: str = response.json()["detail"]["code"]
     return code
+
+
+async def add_member(
+    client: httpx.AsyncClient,
+    owner: Account,
+    workspace_id: str,
+    invitee: Account,
+    role: str,
+) -> None:
+    added = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/members",
+        json={"email": invitee.email, "role": role},
+        headers=owner.headers,
+    )
+    assert added.status_code == 201, added.text
+
+
+async def force_status(
+    db_session: AsyncSession,
+    document_id: str,
+    status: DocumentStatus,
+) -> None:
+    """Put a document in a terminal ingestion state without running a worker."""
+    document = await db_session.get(Document, uuid.UUID(document_id))
+    assert document is not None
+    document.status = status
+    await db_session.flush()
 
 
 async def test_upload_download_roundtrip_with_audit(
@@ -307,6 +337,204 @@ async def test_upload_enqueues_ingestion_and_reports_progress(
             headers=owner.headers,
         )
         assert missing.status_code == 404
+
+
+async def test_archive_hides_a_document_and_restore_returns_it(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    archived = await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["archived_at"] is not None
+    # Archiving must not rewrite the ingestion outcome; provenance stays put.
+    assert archived.json()["status"] == "pending"
+
+    listing = await client.get(base, headers=owner.headers)
+    assert listing.json() == []
+    with_archived = await client.get(f"{base}?include_archived=true", headers=owner.headers)
+    assert [entry["id"] for entry in with_archived.json()] == [document_id]
+
+    # The detail and status routes still resolve, so the UI can explain the state.
+    progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert progress.json()["archived"] is True
+    assert progress.json()["retryable"] is False
+
+    # Archiving twice keeps the first withdrawal timestamp.
+    again = await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+    assert again.json()["archived_at"] == archived.json()["archived_at"]
+
+    restored = await client.post(f"{base}/{document_id}/restore", headers=owner.headers)
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["archived_at"] is None
+    reappeared = await client.get(base, headers=owner.headers)
+    assert [entry["id"] for entry in reappeared.json()] == [document_id]
+
+    actions = (
+        await db_session.scalars(
+            select(AuditLog.action).where(AuditLog.resource_type == "document")
+        )
+    ).all()
+    assert "document.archived" in actions
+    assert "document.restored" in actions
+
+
+async def test_retry_only_reprocesses_a_failed_document(
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> None:
+    from app.ingestion.queue import RedisJobQueue
+
+    settings = storage_settings()
+    async with build_client(db_session, settings) as client:
+        owner = await make_account(client, "owner@example.com")
+        workspace_id = await make_workspace(client, owner)
+        document_id = (await upload(client, owner, workspace_id)).json()["id"]
+        base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+        # A pending document has nothing to retry, and a second run would race
+        # the first over the same rows.
+        too_early = await client.post(f"{base}/{document_id}/retry", headers=owner.headers)
+        assert too_early.status_code == 409
+        assert error_code(too_early) == "document_not_retryable"
+
+        # A scanner verdict is terminal: quarantined content is never handed
+        # back to the pipeline on request.
+        await force_status(db_session, document_id, DocumentStatus.QUARANTINED)
+        quarantined = await client.post(f"{base}/{document_id}/retry", headers=owner.headers)
+        assert quarantined.status_code == 409
+        assert error_code(quarantined) == "document_not_retryable"
+
+        await force_status(db_session, document_id, DocumentStatus.FAILED)
+        # An archived document must be restored before it is processed again.
+        await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+        while_archived = await client.post(f"{base}/{document_id}/retry", headers=owner.headers)
+        assert while_archived.status_code == 409
+        assert error_code(while_archived) == "document_archived"
+        await client.post(f"{base}/{document_id}/restore", headers=owner.headers)
+
+        queue = RedisJobQueue(
+            settings.redis_url,
+            queue_key=settings.ingestion_queue_key,
+            dead_letter_key=settings.ingestion_dead_letter_key,
+        )
+        try:
+            assert await queue.dequeue(0) is not None  # the original upload
+            retried = await client.post(f"{base}/{document_id}/retry", headers=owner.headers)
+            assert retried.status_code == 200, retried.text
+            body = retried.json()
+            assert body["status"] == "pending"
+            assert body["job_status"] == "queued"
+            assert body["attempts"] == 0
+
+            message = await queue.dequeue(0)
+            assert message is not None
+            assert str(message.workspace_id) == workspace_id
+        finally:
+            await queue.aclose()
+
+        # The failed run is kept: a retry adds a job rather than rewriting history.
+        job_count = await db_session.scalar(
+            select(func.count())
+            .select_from(IngestionJob)
+            .where(IngestionJob.document_id == uuid.UUID(document_id))
+        )
+        assert job_count == 2
+
+        missing = await client.post(f"{base}/{uuid.uuid4()}/retry", headers=owner.headers)
+        assert missing.status_code == 404
+        assert error_code(missing) == "document_not_found"
+
+
+async def test_delete_requires_archive_and_purges_content(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> None:
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    storage_key = await db_session.scalar(
+        select(DocumentVersion.storage_key).where(
+            DocumentVersion.document_id == uuid.UUID(document_id)
+        )
+    )
+    assert storage_key is not None
+
+    refused = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert refused.status_code == 409
+    assert error_code(refused) == "document_delete_requires_archive"
+    assert await object_storage.get_object(storage_key) == PDF_BYTES
+
+    await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+    deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+
+    gone = await client.get(f"{base}/{document_id}", headers=owner.headers)
+    assert gone.status_code == 404
+    assert await db_session.get(Document, uuid.UUID(document_id)) is None
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        await object_storage.get_object(storage_key)
+
+    # The audit trail outlives the document it describes.
+    logged = (
+        await db_session.scalars(
+            select(AuditLog).where(
+                AuditLog.action == "document.deleted",
+                AuditLog.resource_id == uuid.UUID(document_id),
+            )
+        )
+    ).all()
+    assert len(logged) == 1
+    assert logged[0].detail["version_count"] == 1
+
+
+async def test_lifecycle_authorization_matrix(client: httpx.AsyncClient) -> None:
+    owner = await make_account(client, "owner@example.com")
+    member = await make_account(client, "member@example.com")
+    viewer = await make_account(client, "viewer@example.com")
+    outsider = await make_account(client, "outsider@example.com")
+    workspace_id = await make_workspace(client, owner)
+    await add_member(client, owner, workspace_id, member, "member")
+    await add_member(client, owner, workspace_id, viewer, "viewer")
+
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    # Withdrawing or destroying evidence is owner/admin work, so a member who
+    # may upload still cannot archive, restore, or delete.
+    for path in (f"{base}/{document_id}/archive", f"{base}/{document_id}/restore"):
+        refused = await client.post(path, headers=member.headers)
+        assert refused.status_code == 403, path
+        assert error_code(refused) == "insufficient_role"
+    refused_delete = await client.delete(f"{base}/{document_id}", headers=member.headers)
+    assert refused_delete.status_code == 403
+    assert error_code(refused_delete) == "insufficient_role"
+
+    # Retrying reprocesses bytes the workspace already accepted, so it follows
+    # the upload capability: members may, viewers may not.
+    refused_retry = await client.post(f"{base}/{document_id}/retry", headers=viewer.headers)
+    assert refused_retry.status_code == 403
+    assert error_code(refused_retry) == "insufficient_role"
+
+    # A non-member learns nothing about the workspace, let alone the document.
+    for method, path in (
+        ("POST", f"{base}/{document_id}/archive"),
+        ("POST", f"{base}/{document_id}/retry"),
+        ("DELETE", f"{base}/{document_id}"),
+    ):
+        invisible = await client.request(method, path, headers=outsider.headers)
+        assert invisible.status_code == 404, path
+        assert error_code(invisible) == "workspace_not_found"
+
+    anonymous = await client.post(f"{base}/{document_id}/archive")
+    assert anonymous.status_code == 401
 
 
 async def test_listing_and_detail_for_members(client: httpx.AsyncClient) -> None:

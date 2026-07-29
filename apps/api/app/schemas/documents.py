@@ -19,6 +19,7 @@ class DocumentResponse(BaseModel):
     sha256: str
     status: DocumentStatus
     created_at: datetime
+    archived_at: datetime | None
 
 
 class DownloadLinkResponse(BaseModel):
@@ -36,3 +37,7 @@ class DocumentProgressResponse(BaseModel):
     attempts: int
     error: str | None
     updated_at: datetime
+    archived: bool
+    # Whether the caller may ask for another ingestion run right now. Computed
+    # from server state so the UI never has to reimplement the rule.
+    retryable: bool

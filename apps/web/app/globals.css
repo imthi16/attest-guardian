@@ -566,6 +566,206 @@ h2 {
   font-size: 1.15rem;
 }
 
+/* --------------------------------------------------------- document library */
+
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.document-table {
+  width: 100%;
+  margin: 1.5rem 0 0;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.document-table th,
+.document-table td {
+  padding: 0.9rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.document-table th {
+  color: var(--accent-dark);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* An archived document is withdrawn from evidence; it stays legible but must
+   not read as an equal peer of the documents that can still be cited. */
+.document-table tr[data-archived="true"] .document-title {
+  color: var(--muted);
+}
+
+.document-title {
+  display: block;
+  font-weight: 700;
+}
+
+.document-filename {
+  display: block;
+  color: var(--muted);
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+
+.document-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.status-badge[data-tone="ready"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent-dark);
+}
+
+.status-badge[data-tone="pending"] {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  color: var(--warning);
+}
+
+.status-badge[data-tone="blocked"] {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+.status-badge[data-tone="withdrawn"] {
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------- ingestion */
+
+.ingestion-state {
+  max-width: 44rem;
+  margin: 1.5rem 0 0;
+  padding: 1.5rem;
+  border: 1px solid var(--line);
+  border-left-width: 5px;
+  border-radius: 1rem;
+  background: var(--panel);
+}
+
+.ingestion-state[data-tone="ready"] {
+  border-left-color: var(--accent);
+}
+
+.ingestion-state[data-tone="pending"] {
+  border-left-color: var(--warning);
+}
+
+.ingestion-state[data-tone="blocked"] {
+  border-left-color: var(--danger);
+}
+
+.ingestion-state[data-tone="withdrawn"] {
+  border-left-color: var(--muted);
+}
+
+.ingestion-state h3 {
+  margin: 0.25rem 0 0;
+}
+
+.ingestion-facts,
+.document-facts {
+  display: grid;
+  gap: 1rem 1.5rem;
+  margin: 1.25rem 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.ingestion-facts dt,
+.document-facts dt {
+  color: var(--accent-dark);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ingestion-facts dd,
+.document-facts dd {
+  margin: 0.25rem 0 0;
+  word-break: break-word;
+}
+
+.document-hash {
+  font-family: ui-monospace, "SFMono-Regular", "Menlo", monospace;
+  font-size: 0.82rem;
+}
+
+/* The worker's error string can quote bytes from an untrusted file, so it is
+   presented as a quoted report rather than as the page's own voice. */
+.ingestion-error {
+  margin: 1.25rem 0 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--danger) 8%, var(--paper));
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.ingestion-error-label {
+  font-weight: 800;
+}
+
+/* ------------------------------------------------------------------ uploads */
+
+.upload-form {
+  max-width: 34rem;
+  margin: 1.5rem 0 0;
+  padding: 1.75rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--panel);
+}
+
+.upload-form input[type="file"] {
+  padding: 0.6rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  font: inherit;
+}
+
+.upload-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  margin: 1.25rem 0 0;
+}
+
+.upload-progress progress {
+  width: 100%;
+  height: 0.6rem;
+  accent-color: var(--accent);
+}
+
+.upload-progress-text {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 /* ----------------------------------------------------------- access notices */
 
 .access-notice {
@@ -614,13 +814,19 @@ h2 {
   .workspace-capabilities,
   .workspace-roster,
   .workspace-invite,
-  .workspace-next {
+  .workspace-next,
+  .workspace-documents,
+  .workspace-upload,
+  .workspace-document-facts,
+  .workspace-document-state,
+  .workspace-document-controls {
     padding: 2rem 0;
   }
 
-  /* The roster becomes a stack of labelled cards; a three-column table cannot
-     stay legible at phone widths without horizontal scrolling. */
-  .member-table thead {
+  /* The roster and library become stacks of labelled cards; a multi-column
+     table cannot stay legible at phone widths without horizontal scrolling. */
+  .member-table thead,
+  .document-table thead {
     position: absolute;
     overflow: hidden;
     width: 1px;
@@ -631,23 +837,30 @@ h2 {
   .member-table,
   .member-table tbody,
   .member-table tr,
-  .member-table td {
+  .member-table td,
+  .document-table,
+  .document-table tbody,
+  .document-table tr,
+  .document-table td {
     display: block;
     width: 100%;
   }
 
-  .member-table tr {
+  .member-table tr,
+  .document-table tr {
     margin-bottom: 1rem;
     border: 1px solid var(--line);
     border-radius: 0.75rem;
     background: var(--panel);
   }
 
-  .member-table td {
+  .member-table td,
+  .document-table td {
     border-bottom: none;
   }
 
-  .member-table td::before {
+  .member-table td::before,
+  .document-table td::before {
     display: block;
     color: var(--accent-dark);
     content: attr(data-label);
@@ -657,8 +870,15 @@ h2 {
     text-transform: uppercase;
   }
 
+  /* Controls stack full width so each stays a comfortable tap target. */
+  .document-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .add-member-form,
   .create-workspace-form,
+  .upload-form,
   .auth-card {
     padding: 1.35rem;
   }
