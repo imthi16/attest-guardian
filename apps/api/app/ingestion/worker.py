@@ -62,6 +62,18 @@ _PLACEHOLDER_STAGES = (
 )
 
 
+class JobVanishedError(Exception):
+    """The job row disappeared while this worker was processing it.
+
+    Permanent deletion refuses to run while a job is queued or claimed, so this
+    is not the ordinary path — but the check and the cascade are not one atomic
+    step, and a row can also be removed administratively. Losing the row means
+    there is nothing left to record the outcome on, so the worker abandons the
+    job quietly instead of failing on an assertion and taking the process down
+    with it.
+    """
+
+
 class QuarantinedError(Exception):
     """The scanner flagged the content; the document must be quarantined."""
 
@@ -128,6 +140,11 @@ class IngestionWorker:
             return
         try:
             await self._run_stages(message)
+        except JobVanishedError:
+            logger.info(
+                "job row vanished mid-flight; nothing left to record",
+                extra={"job_id": str(message.job_id)},
+            )
         except QuarantinedError as verdict:
             await self._quarantine(message, verdict.reason)
         except PermanentIngestionError as error:
@@ -181,7 +198,8 @@ class IngestionWorker:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
             job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above, row cannot vanish
+            if job is None:
+                raise JobVanishedError
             job.stage = stage
         logger.info(
             "stage reached",
@@ -193,7 +211,8 @@ class IngestionWorker:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
             job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            if job is None:
+                raise JobVanishedError
             document = await session.get(Document, job.document_id)
             if document is None:
                 msg = "document row is gone"
@@ -425,7 +444,14 @@ class IngestionWorker:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
             job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            if job is None:
+                # Terminal handler: there is no row left to mark, and raising
+                # here would escape `process` (this runs in its `else` branch).
+                logger.info(
+                    "job row vanished before completion could be recorded",
+                    extra={"job_id": str(message.job_id)},
+                )
+                return
             job.status = IngestionStatus.SUCCEEDED
             job.stage = IngestionStage.READY
             job.finished_at = datetime.now(UTC)
@@ -444,7 +470,12 @@ class IngestionWorker:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
             job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            if job is None:
+                logger.info(
+                    "job row vanished before quarantine could be recorded",
+                    extra={"job_id": str(message.job_id)},
+                )
+                return
             job.status = IngestionStatus.FAILED
             job.error = f"quarantined: {reason}"
             job.finished_at = datetime.now(UTC)
@@ -487,13 +518,24 @@ class IngestionWorker:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
             job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            if job is None:
+                # The document was deleted under this job. Asserting here would
+                # raise from inside an exception handler and escape
+                # `run_forever`, stopping the worker over one deleted document.
+                logger.info(
+                    "job row vanished before failure could be recorded",
+                    extra={"job_id": str(message.job_id)},
+                )
+                return
             job.error = error
             will_retry = retry and job.attempts < self._max_attempts
             if will_retry:
                 job.status = IngestionStatus.QUEUED
             else:
                 job.status = IngestionStatus.FAILED
+                # A deterministic failure is recorded as such so the retry
+                # endpoint can refuse it: the same bytes would fail identically.
+                job.permanent_failure = not retry
                 job.finished_at = datetime.now(UTC)
                 document = await session.get(Document, job.document_id)
                 if document is not None:

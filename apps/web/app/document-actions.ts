@@ -89,12 +89,23 @@ export async function restoreDocumentAction(
     return target;
   }
 
-  const state = relayFailure(await restoreDocument(target.workspaceId, target.documentId));
-  if (state.status === "success") {
-    revalidateDocument(target);
-    return { message: "The document is available as evidence again.", status: "success" };
+  const result = await restoreDocument(target.workspaceId, target.documentId);
+  const state = relayFailure(result);
+  if (state.status !== "success" || !result.ok) {
+    return state;
   }
-  return state;
+  revalidateDocument(target);
+  // Restoring only clears `archived_at`. A document that never finished
+  // processing is still excluded from evidence by its status, so promising it
+  // is usable again would be wrong for exactly the documents most likely to be
+  // archived in the first place.
+  return {
+    message:
+      result.data.status === "ready"
+        ? "The document is available as evidence again."
+        : "The document is restored, but it is not evidence yet: processing has not completed successfully.",
+    status: "success",
+  };
 }
 
 export async function retryDocumentAction(

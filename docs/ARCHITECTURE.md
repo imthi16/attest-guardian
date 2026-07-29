@@ -321,11 +321,28 @@ enumerates the Python action enum, so a capability added to the API without a mi
   the pipeline. A pending, processing, or ready document has nothing to retry and a second run would
   race the first over the same rows. The failed job row is kept and a new `QUEUED` job is inserted,
   so failure history survives and the worker's compare-and-set claim still sees a clean row.
+- **Retry refuses a permanent failure.** The worker records both exhausted-transient and
+  deterministic failures as `FAILED`, so `ingestion_jobs.permanent_failure` distinguishes them. A
+  hash mismatch, an unparseable file, or a provenance violation fails identically on every future
+  run over the same bytes; admitting those would let a caller queue unbounded doomed work.
+- **Retry and delete lock the document row.** Both read it `FOR UPDATE` before branching on its
+  state. The worker's claim is a compare-and-set on one job id — that makes duplicate delivery of a
+  single job safe, but does not deduplicate two distinct jobs, so two concurrent retries would
+  otherwise each enqueue one and two workers would race over the same pages and chunks.
 - **Delete** requires the document to be archived first. That state is reversible and has already
-  removed the document from evidence, so nothing is destroyed on the strength of one click. Rows are
-  deleted before the stored objects, so a storage failure rolls the request back rather than leaving
-  a downloadable document whose bytes are gone; uploads create exactly one version today, so the
-  purge is a single object and cannot half-succeed.
+  removed the document from evidence, so nothing is destroyed on the strength of one click.
+- **Delete is refused while a job is `RUNNING`.** The cascade would remove the row a worker is still
+  writing stages to. A merely `QUEUED` job is not blocking: the worker's claim already drops a
+  message whose row has gone, and refusing there would make a document undeletable whenever its
+  queue is backed up. Because the check and the cascade are not atomic, the worker also treats a
+  vanished job as abandoned rather than asserting on it.
+- **Delete purges every stored object, not just the upload.** With `INGESTION_STORE_PAGE_IMAGES` on,
+  ingestion writes a rendered PNG per page and records the key on the `pages` row. The cascade
+  destroys the only record of those keys, so they are collected before the rows are removed.
+- Rows are deleted before the stored objects, so a storage failure rolls the request back rather
+  than leaving a downloadable document whose bytes are gone. The reverse window — a commit failure
+  after a successful purge — is smaller but not closed; doing so needs a committed deletion marker
+  and an idempotent background purge, tracked as follow-up.
 
 ### Upload and download paths
 

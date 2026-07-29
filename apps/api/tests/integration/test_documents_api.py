@@ -14,8 +14,8 @@ from typing import Any
 import httpx
 import pytest
 from app.config import Settings
-from app.db.models.documents import Document, DocumentVersion
-from app.db.models.enums import DocumentStatus
+from app.db.models.documents import Document, DocumentVersion, Page
+from app.db.models.enums import DocumentStatus, IngestionStatus
 from app.db.models.operations import AuditLog, IngestionJob
 from app.storage.s3 import S3ObjectStorage
 from botocore.exceptions import ClientError
@@ -555,3 +555,189 @@ async def test_listing_and_detail_for_members(client: httpx.AsyncClient) -> None
     )
     assert detail.status_code == 200
     assert detail.json()["sha256"] == uploaded.json()["sha256"]
+
+
+async def test_delete_purges_rendered_page_images(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> None:
+    """Page images are document content and must not outlive a deletion.
+
+    When `ingestion_store_page_images` is on, the worker renders a PNG per page
+    and records its key on the `pages` row. Deleting the document cascades those
+    rows away, so a purge that only collected version keys would leave pictures
+    of the document's pages readable in the bucket forever.
+    """
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    version = await db_session.scalar(
+        select(DocumentVersion).where(DocumentVersion.document_id == uuid.UUID(document_id))
+    )
+    assert version is not None
+
+    image_key = f"{version.storage_key}.page-1.png"
+    await object_storage.put_object(image_key, b"\x89PNG\r\n\x1a\n", "image/png")
+    db_session.add(
+        Page(
+            document_version_id=version.id,
+            page_number=1,
+            text="rendered page",
+            image_storage_key=image_key,
+        )
+    )
+    await db_session.flush()
+
+    await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+    deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        await object_storage.get_object(image_key)
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        await object_storage.get_object(version.storage_key)
+
+    logged = await db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == "document.deleted",
+            AuditLog.resource_id == uuid.UUID(document_id),
+        )
+    )
+    assert logged is not None
+    # One version, two stored objects: the upload and its rendered page.
+    assert logged.detail["version_count"] == 1
+    assert logged.detail["object_count"] == 2
+
+
+async def test_delete_is_refused_while_a_worker_is_mid_run(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Deleting a claimed job would pull the row out from under the worker."""
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+    await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+
+    job = await db_session.scalar(
+        select(IngestionJob).where(IngestionJob.document_id == uuid.UUID(document_id))
+    )
+    assert job is not None
+    job.status = IngestionStatus.RUNNING
+    await db_session.flush()
+
+    refused = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert refused.status_code == 409
+    assert error_code(refused) == "document_processing"
+    assert await db_session.get(Document, uuid.UUID(document_id)) is not None
+
+    # A merely queued job is not blocking: the worker's claim already drops a
+    # message whose row has gone, and refusing here would make a document
+    # undeletable whenever its queue is backed up.
+    job.status = IngestionStatus.QUEUED
+    await db_session.flush()
+    deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+
+
+async def test_permanent_failures_are_not_retryable(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A deterministic failure would fail identically on the same bytes.
+
+    The worker records both exhausted-transient and permanent failures as
+    `FAILED`; only the transient kind can plausibly succeed on another run.
+    """
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    await force_status(db_session, document_id, DocumentStatus.FAILED)
+    job = await db_session.scalar(
+        select(IngestionJob).where(IngestionJob.document_id == uuid.UUID(document_id))
+    )
+    assert job is not None
+    job.status = IngestionStatus.FAILED
+    job.permanent_failure = True
+    job.error = "stored object hash mismatch"
+    await db_session.flush()
+
+    refused = await client.post(f"{base}/{document_id}/retry", headers=owner.headers)
+    assert refused.status_code == 409
+    assert error_code(refused) == "document_permanently_failed"
+
+    # ...and the status endpoint says so rather than offering a doomed button.
+    progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert progress.json()["retryable"] is False
+
+    # A transient failure that merely exhausted its attempts stays retryable.
+    job.permanent_failure = False
+    await db_session.flush()
+    progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert progress.json()["retryable"] is True
+
+
+async def test_retryable_reflects_the_callers_own_capability(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """`retryable` must mean "you may retry", not "someone may".
+
+    A viewer holds no `UPLOAD_DOCUMENTS`, so reporting the document state alone
+    would advertise a button the same caller is refused.
+    """
+    owner = await make_account(client, "owner@example.com")
+    viewer = await make_account(client, "viewer@example.com")
+    workspace_id = await make_workspace(client, owner)
+    await add_member(client, workspace_id, owner, viewer, "viewer")
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    await force_status(db_session, document_id, DocumentStatus.FAILED)
+
+    as_owner = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert as_owner.json()["retryable"] is True
+
+    as_viewer = await client.get(f"{base}/{document_id}/status", headers=viewer.headers)
+    assert as_viewer.status_code == 200
+    assert as_viewer.json()["retryable"] is False
+
+    # And the flag matches what the endpoint actually does for that caller.
+    refused = await client.post(f"{base}/{document_id}/retry", headers=viewer.headers)
+    assert refused.status_code == 403
+
+
+async def test_upload_policy_reports_the_deployed_limits(client: httpx.AsyncClient) -> None:
+    """Clients read the effective limits instead of mirroring the defaults."""
+    owner = await make_account(client, "owner@example.com")
+    viewer = await make_account(client, "viewer@example.com")
+    workspace_id = await make_workspace(client, owner)
+    await add_member(client, workspace_id, owner, viewer, "viewer")
+
+    # Readable by any member: a viewer never uploads, but the same page renders
+    # the limits, and a 403 there would be a confusing way to say "read only".
+    policy = await client.get(
+        f"/api/v1/workspaces/{workspace_id}/documents/policy",
+        headers=viewer.headers,
+    )
+    assert policy.status_code == 200, policy.text
+    body = policy.json()
+    assert body["max_upload_bytes"] == 25 * 1024 * 1024
+    assert body["max_filename_length"] == 255
+    assert sorted(body["accepted_extensions"]) == [".docx", ".markdown", ".md", ".pdf", ".txt"]
+
+    # The literal path must not be captured as a document id.
+    assert "document_not_found" not in policy.text
+
+    outsider = await make_account(client, "outsider@example.com")
+    hidden = await client.get(
+        f"/api/v1/workspaces/{workspace_id}/documents/policy",
+        headers=outsider.headers,
+    )
+    assert hidden.status_code == 404

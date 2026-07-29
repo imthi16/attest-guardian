@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   ACCEPT_ATTRIBUTE,
   ACCEPTED_EXTENSIONS,
-  MAX_UPLOAD_BYTES,
+  DEFAULT_MAX_UPLOAD_BYTES,
   formatBytes,
   rejectionFor,
 } from "./upload-rules";
@@ -38,11 +38,11 @@ describe("upload rule mirror", () => {
     expect(ACCEPT_ATTRIBUTE.split(",").sort()).toEqual(apiExtensions.sort());
   });
 
-  it("uses the API's upload cap", () => {
+  it("pins the fallback to the API's default upload cap", () => {
     const declared = /max_upload_bytes: int = (\d+) \* (\d+) \* (\d+)/.exec(configSource);
     expect(declared).not.toBeNull();
     const [, a, b, c] = declared ?? [];
-    expect(Number(a) * Number(b) * Number(c)).toBe(MAX_UPLOAD_BYTES);
+    expect(Number(a) * Number(b) * Number(c)).toBe(DEFAULT_MAX_UPLOAD_BYTES);
   });
 
   it("mirrors the API's filename length limit", () => {
@@ -71,8 +71,23 @@ describe("rejectionFor", () => {
   });
 
   it("rejects a file over the cap", () => {
-    expect(rejectionFor(file("scan.pdf", MAX_UPLOAD_BYTES + 1))?.code).toBe("file_too_large");
-    expect(rejectionFor(file("scan.pdf", MAX_UPLOAD_BYTES))).toBeNull();
+    expect(rejectionFor(file("scan.pdf", DEFAULT_MAX_UPLOAD_BYTES + 1))?.code).toBe(
+      "file_too_large",
+    );
+    expect(rejectionFor(file("scan.pdf", DEFAULT_MAX_UPLOAD_BYTES))).toBeNull();
+  });
+
+  it("honours a deployment cap that differs from the API default", () => {
+    // The whole point of taking the limit as an argument: an operator who
+    // raises MAX_UPLOAD_BYTES must not have files refused in the browser, and
+    // one who lowers it must not be promised uploads the API will reject.
+    const raised = DEFAULT_MAX_UPLOAD_BYTES * 4;
+    expect(rejectionFor(file("scan.pdf", DEFAULT_MAX_UPLOAD_BYTES + 1), raised)).toBeNull();
+    expect(rejectionFor(file("scan.pdf", raised + 1), raised)?.code).toBe("file_too_large");
+
+    const lowered = 1024;
+    expect(rejectionFor(file("scan.pdf", 2048), lowered)?.code).toBe("file_too_large");
+    expect(rejectionFor(file("scan.pdf", 2048), lowered)?.message).toContain("1.0 KB");
   });
 
   it("rejects an overlong filename", () => {
@@ -85,7 +100,7 @@ describe("formatBytes", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(2048)).toBe("2.0 KB");
     expect(formatBytes(204800)).toBe("200 KB");
-    expect(formatBytes(MAX_UPLOAD_BYTES)).toBe("25 MB");
+    expect(formatBytes(DEFAULT_MAX_UPLOAD_BYTES)).toBe("25 MB");
     expect(formatBytes(5 * 1024 ** 3)).toBe("5.0 GB");
   });
 });

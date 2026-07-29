@@ -1,12 +1,18 @@
 import { POST } from "./route";
-import { uploadDocument } from "../../../../../lib/attest-api";
+import { fetchUploadPolicy, uploadDocument } from "../../../../../lib/attest-api";
 import { SESSION_EXPIRED } from "../../../../../lib/session";
-import { MAX_UPLOAD_BYTES } from "../../../../../lib/upload-rules";
+import { DEFAULT_MAX_UPLOAD_BYTES } from "../../../../../lib/upload-rules";
 import type { NextRequest } from "next/server";
 
-vi.mock("../../../../../lib/attest-api", () => ({ uploadDocument: vi.fn() }));
+vi.mock("../../../../../lib/attest-api", () => ({
+  fetchUploadPolicy: vi.fn(),
+  uploadDocument: vi.fn(),
+}));
 
 const mockedUpload = vi.mocked(uploadDocument);
+const mockedPolicy = vi.mocked(fetchUploadPolicy);
+
+const APP_HOST = "attest.example";
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -22,12 +28,44 @@ const accepted = {
   archived_at: null,
 };
 
-function fileRequest(entries: Array<[string, FormDataEntryValue]>): NextRequest {
+/**
+ * A same-origin multipart POST. `Origin`/`Host` and `Content-Length` are set
+ * because the relay checks both before it parses anything.
+ */
+function fileRequest(
+  entries: Array<[string, FormDataEntryValue]>,
+  overrides: Readonly<{
+    contentLength?: string | null;
+    host?: string;
+    origin?: string | null;
+  }> = {},
+): NextRequest {
   const form = new FormData();
   for (const [key, value] of entries) {
     form.set(key, value);
   }
-  return { formData: async () => form } as unknown as NextRequest;
+  const declared =
+    overrides.contentLength === undefined
+      ? String(
+          entries.reduce(
+            (total, [, value]) => total + (value instanceof File ? value.size : 0),
+            1024,
+          ),
+        )
+      : overrides.contentLength;
+  const headers = new Map<string, string>();
+  const origin = overrides.origin === undefined ? `https://${APP_HOST}` : overrides.origin;
+  if (origin !== null) {
+    headers.set("origin", origin);
+  }
+  headers.set("host", overrides.host ?? APP_HOST);
+  if (declared !== null) {
+    headers.set("content-length", declared);
+  }
+  return {
+    formData: async () => form,
+    headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
+  } as unknown as NextRequest;
 }
 
 function pdf(size = 12): File {
@@ -40,6 +78,14 @@ const context = { params: Promise.resolve({ workspaceId: WORKSPACE_ID }) };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedPolicy.mockResolvedValue({
+    ok: true,
+    data: {
+      max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
+      max_filename_length: 255,
+      accepted_extensions: [".pdf", ".txt"],
+    },
+  });
 });
 
 describe("POST /api/workspaces/[workspaceId]/documents", () => {
@@ -65,13 +111,102 @@ describe("POST /api/workspaces/[workspaceId]/documents", () => {
   });
 
   it("rejects an oversized body before relaying it", async () => {
-    const response = await POST(fileRequest([["file", pdf(MAX_UPLOAD_BYTES + 1)]]), context);
+    const response = await POST(
+      fileRequest([["file", pdf(DEFAULT_MAX_UPLOAD_BYTES + 1)]], {
+        // Under the header bound, so this is the post-parse size check.
+        contentLength: String(DEFAULT_MAX_UPLOAD_BYTES + 1),
+      }),
+      context,
+    );
 
     expect(response.status).toBe(413);
     expect(await response.json()).toEqual({
       detail: { code: "file_too_large", message: expect.stringContaining("upload limit") },
     });
     expect(mockedUpload).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized body without parsing it at all", async () => {
+    // The point of the header check: formData() would materialize the whole
+    // body in memory, so a declared-oversize request must never reach it.
+    const parse = vi.fn();
+    const request = fileRequest([["file", pdf()]], {
+      contentLength: String(DEFAULT_MAX_UPLOAD_BYTES * 10),
+    });
+    (request as unknown as { formData: unknown }).formData = parse;
+
+    const response = await POST(request, context);
+
+    expect(response.status).toBe(413);
+    expect(parse).not.toHaveBeenCalled();
+    expect(mockedUpload).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body that declares no length", async () => {
+    const response = await POST(fileRequest([["file", pdf()]], { contentLength: null }), context);
+
+    expect(response.status).toBe(411);
+    expect(mockedUpload).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cross-origin upload even with a valid session cookie", async () => {
+    // SameSite=Lax scopes the cookie to the site, not the origin, so a sibling
+    // origin can post here credentialed. Server actions get this check for
+    // free; a route handler has to make it.
+    const response = await POST(
+      fileRequest([["file", pdf()]], { origin: "https://evil.attest.example" }),
+      context,
+    );
+
+    expect(response.status).toBe(403);
+    expect(mockedUpload).not.toHaveBeenCalled();
+  });
+
+  it("refuses an upload that sends no Origin at all", async () => {
+    const response = await POST(fileRequest([["file", pdf()]], { origin: null }), context);
+
+    expect(response.status).toBe(403);
+    expect(mockedUpload).not.toHaveBeenCalled();
+  });
+
+  it("accepts the proxy's forwarded host as the app origin", async () => {
+    mockedUpload.mockResolvedValue({ ok: true, data: accepted });
+    const request = fileRequest([["file", pdf()]], { origin: "https://public.example" });
+    const headers = new Map([
+      ["origin", "https://public.example"],
+      ["host", "internal:3000"],
+      ["x-forwarded-host", "public.example"],
+      ["content-length", "2048"],
+    ]);
+    (request as unknown as { headers: unknown }).headers = {
+      get: (name: string) => headers.get(name.toLowerCase()) ?? null,
+    };
+
+    const response = await POST(request, context);
+
+    expect(response.status).toBe(201);
+  });
+
+  it("uses the deployment's raised limit rather than the compiled default", async () => {
+    mockedUpload.mockResolvedValue({ ok: true, data: accepted });
+    mockedPolicy.mockResolvedValue({
+      ok: true,
+      data: {
+        max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES * 4,
+        max_filename_length: 255,
+        accepted_extensions: [".pdf"],
+      },
+    });
+
+    const oversizeForDefault = DEFAULT_MAX_UPLOAD_BYTES + 1;
+    const response = await POST(
+      fileRequest([["file", pdf(oversizeForDefault)]], {
+        contentLength: String(oversizeForDefault),
+      }),
+      context,
+    );
+
+    expect(response.status).toBe(201);
   });
 
   it("rejects a request with no file", async () => {
@@ -83,11 +218,10 @@ describe("POST /api/workspaces/[workspaceId]/documents", () => {
   });
 
   it("rejects a body that is not multipart form data", async () => {
-    const broken = {
-      formData: async () => {
-        throw new TypeError("not multipart");
-      },
-    } as unknown as NextRequest;
+    const broken = fileRequest([["file", pdf()]]);
+    (broken as unknown as { formData: unknown }).formData = async () => {
+      throw new TypeError("not multipart");
+    };
 
     const response = await POST(broken, context);
 

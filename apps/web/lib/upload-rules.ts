@@ -12,8 +12,16 @@ export const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown", ".docx"]
 /** The `accept` attribute for the file input, from the same source of truth. */
 export const ACCEPT_ATTRIBUTE = ACCEPTED_EXTENSIONS.join(",");
 
-/** Mirrors `Settings.max_upload_bytes` (25 MiB) in the API. */
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+/**
+ * The API's *default* `Settings.max_upload_bytes` (25 MiB).
+ *
+ * Only a fallback for rendering before the deployment's real limit is known —
+ * `max_upload_bytes` is per-environment configuration, so anything that
+ * actually accepts or rejects a file must use the limit served by
+ * `GET /workspaces/{id}/documents/policy` instead of this constant. The parity
+ * test pins it to the Python default so the fallback cannot drift either.
+ */
+export const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export const MAX_FILENAME_LENGTH = 255;
 
@@ -46,8 +54,15 @@ function extensionOf(filename: string): string {
  *
  * Returns `null` when nothing local rules out the upload. The codes match the
  * API's so a rejection reads the same wherever it was decided.
+ *
+ * `maxUploadBytes` comes from the deployment's upload policy; it falls back to
+ * the API default only so a caller without the policy yet still gets a sane
+ * message rather than no check at all.
  */
-export function rejectionFor(file: File): UploadRejection | null {
+export function rejectionFor(
+  file: File,
+  maxUploadBytes: number = DEFAULT_MAX_UPLOAD_BYTES,
+): UploadRejection | null {
   if (file.name.length > MAX_FILENAME_LENGTH) {
     return { code: "invalid_filename", message: "The filename is too long." };
   }
@@ -62,10 +77,10 @@ export function rejectionFor(file: File): UploadRejection | null {
   if (file.size === 0) {
     return { code: "empty_file", message: "The file is empty." };
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
+  if (file.size > maxUploadBytes) {
     return {
       code: "file_too_large",
-      message: `The file exceeds the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`,
+      message: `The file exceeds the ${formatBytes(maxUploadBytes)} upload limit.`,
     };
   }
   return null;

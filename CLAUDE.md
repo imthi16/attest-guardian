@@ -109,8 +109,15 @@ Repository layout and intended ownership per directory:
   `app/documents/lifecycle.py`: archive/restore are a reversible `documents.archived_at`
   timestamp (never a `status` rewrite) gated by the new `MANAGE_DOCUMENTS` capability;
   retry (`UPLOAD_DOCUMENTS`) inserts a *new* `QUEUED` job only for a `FAILED` document —
-  quarantine is terminal and is never reprocessed; permanent delete is refused unless the
-  document is already archived. Evidence eligibility is one predicate,
+  quarantine is terminal and is never reprocessed, and neither is a job flagged
+  `permanent_failure` (deterministic failures would fail identically on the same bytes);
+  permanent delete is refused unless the document is already archived *and* no job is
+  `RUNNING`, and it purges rendered page images (`pages.image_storage_key`) alongside the
+  uploaded bytes — the cascade destroys the only record of those keys. Retry and delete read
+  the document `FOR UPDATE`: the worker's compare-and-set claim dedupes duplicate delivery of
+  one job, not two distinct jobs. Terminal worker handlers must never `assert` the job row
+  exists — raising from an exception handler escapes `run_forever` and stops the worker.
+  Evidence eligibility is one predicate,
   `evidence_eligible()` in `app/db/models/documents.py` (READY **and** not archived), and
   every retrieval gate must use it — lexical, dense, hydration, and citation provenance —
   so archiving stops answers rather than only hiding list rows. Storage integration tests
@@ -135,9 +142,14 @@ Repository layout and intended ownership per directory:
   responses parsed by `lib/contracts.ts` Zod schemas). `lib/permissions.ts` and
   `lib/upload-rules.ts` are advisory mirrors of the API's role matrix and upload validator —
   their tests read the Python sources and fail the build on drift, so never let them diverge.
-  Mutations are server actions (`app/*-actions.ts`); the only route handlers are
+  The *size* cap is not mirrored: `MAX_UPLOAD_BYTES` is per-deployment, so the browser and the
+  relay read it from `GET .../documents/policy` and `DEFAULT_MAX_UPLOAD_BYTES` is only a
+  fallback. Mutations are server actions (`app/*-actions.ts`); the only route handlers are
   `app/api/workspaces/[workspaceId]/documents/**` (upload needs XHR byte progress, download
-  needs a link navigation because the CSP sets `form-action 'self'`). Uploaded filenames,
+  needs a link navigation because the CSP sets `form-action 'self'`). Route handlers get none
+  of a server action's built-in protection, so the upload relay verifies `Origin` against
+  `X-Forwarded-Host`/`Host` (`SameSite=Lax` is per-site, not per-origin) and bounds
+  `Content-Length` *before* `request.formData()`, which buffers the whole body. Uploaded filenames,
   titles, and worker error strings are untrusted: render them as text children only, never
   preview document contents, and keep `dangerouslySetInnerHTML` out of the app.
 - `services/` — planned boundaries for `ingestion`, `retrieval`, `verification`, `safety`, kept as

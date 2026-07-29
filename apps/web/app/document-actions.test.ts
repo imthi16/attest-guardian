@@ -158,6 +158,21 @@ describe("restoreDocumentAction", () => {
     expect(state.message).toContain("available as evidence again");
   });
 
+  it("does not claim a document that never finished processing is evidence", async () => {
+    // Restoring only clears `archived_at`. A failed or quarantined document is
+    // still excluded by `evidence_eligible()`, so saying it is usable again
+    // would be wrong exactly where it matters most.
+    for (const status of ["pending", "processing", "failed", "quarantined"] as const) {
+      mockedRestore.mockResolvedValue({ ok: true, data: { ...document, status } });
+
+      const state = await restoreDocumentAction(idle, target());
+
+      expect(state.status).toBe("success");
+      expect(state.message).not.toContain("available as evidence again");
+      expect(state.message).toContain("not evidence yet");
+    }
+  });
+
   it("relays a refusal", async () => {
     mockedRestore.mockResolvedValue({
       ok: false,

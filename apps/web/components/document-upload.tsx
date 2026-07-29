@@ -18,13 +18,7 @@ import { useRouter } from "next/navigation";
 
 import { Feedback } from "./feedback";
 import { apiErrorDetailSchema, clientErrorCodes, documentSchema } from "../lib/contracts";
-import {
-  ACCEPT_ATTRIBUTE,
-  ACCEPTED_EXTENSIONS,
-  MAX_UPLOAD_BYTES,
-  formatBytes,
-  rejectionFor,
-} from "../lib/upload-rules";
+import { formatBytes, rejectionFor } from "../lib/upload-rules";
 
 type UploadState =
   | Readonly<{ kind: "done"; filename: string }>
@@ -32,7 +26,13 @@ type UploadState =
   | Readonly<{ kind: "idle" }>
   | Readonly<{ kind: "sending"; filename: string; percent: number }>;
 
-type DocumentUploadProps = Readonly<{ workspaceId: string }>;
+type DocumentUploadProps = Readonly<{
+  /** Extensions this deployment accepts, served by the API's upload policy. */
+  acceptedExtensions: readonly string[];
+  /** The deployment's effective size cap, served by the API's upload policy. */
+  maxUploadBytes: number;
+  workspaceId: string;
+}>;
 
 function describeXhrFailure(
   status: number,
@@ -55,7 +55,11 @@ function describeXhrFailure(
   };
 }
 
-export function DocumentUpload({ workspaceId }: DocumentUploadProps) {
+export function DocumentUpload({
+  acceptedExtensions,
+  maxUploadBytes,
+  workspaceId,
+}: DocumentUploadProps) {
   const [state, setState] = useState<UploadState>({ kind: "idle" });
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -129,7 +133,7 @@ export function DocumentUpload({ workspaceId }: DocumentUploadProps) {
       });
       return;
     }
-    const rejection = rejectionFor(file);
+    const rejection = rejectionFor(file, maxUploadBytes);
     if (rejection !== null) {
       setState({ code: rejection.code, kind: "failed", message: rejection.message });
       return;
@@ -143,14 +147,14 @@ export function DocumentUpload({ workspaceId }: DocumentUploadProps) {
       <p className="field">
         <label htmlFor="document-file">Document</label>
         <span className="field-hint" id="document-file-hint">
-          {ACCEPTED_EXTENSIONS.join(", ")} up to {formatBytes(MAX_UPLOAD_BYTES)}. Uploads are
-          scanned and validated before anything is stored.
+          {acceptedExtensions.join(", ")} up to {formatBytes(maxUploadBytes)}. Uploads are scanned
+          and validated before anything is stored.
         </span>
         {/* Deliberately not `required`: the native validation bubble would
             compete with the announced, code-carrying message this form shows
             for a missing file, and only one of the two can be the explanation. */}
         <input
-          accept={ACCEPT_ATTRIBUTE}
+          accept={acceptedExtensions.join(",")}
           aria-describedby="document-file-hint"
           disabled={sending}
           id="document-file"

@@ -7,7 +7,13 @@ import { SystemState } from "../../../../../components/system-state";
 import { WorkspaceNav } from "../../../../../components/workspace-nav";
 import { Feedback } from "../../../../../components/feedback";
 import { errorCodes } from "../../../../../lib/contracts";
-import { fetchCurrentUser, fetchDocuments, fetchWorkspace } from "../../../../../lib/attest-api";
+import {
+  fetchCurrentUser,
+  fetchDocuments,
+  fetchUploadPolicy,
+  fetchWorkspace,
+} from "../../../../../lib/attest-api";
+import { ACCEPTED_EXTENSIONS, DEFAULT_MAX_UPLOAD_BYTES } from "../../../../../lib/upload-rules";
 import { allows } from "../../../../../lib/permissions";
 import { SESSION_EXPIRED } from "../../../../../lib/session";
 
@@ -31,13 +37,14 @@ export default async function DocumentsPage({ params, searchParams }: DocumentsP
   const { archived, deleted } = await searchParams;
   const includeArchived = archived === "1";
 
-  const [user, workspace, documents] = await Promise.all([
+  const [user, workspace, documents, policy] = await Promise.all([
     fetchCurrentUser(),
     fetchWorkspace(workspaceId),
     fetchDocuments(workspaceId, { includeArchived }),
+    fetchUploadPolicy(workspaceId),
   ]);
 
-  for (const result of [user, workspace, documents]) {
+  for (const result of [user, workspace, documents, policy]) {
     if (!result.ok && result.code === SESSION_EXPIRED) {
       redirect(`/login?expired=1&next=/workspaces/${workspaceId}/documents`);
     }
@@ -128,7 +135,16 @@ export default async function DocumentsPage({ params, searchParams }: DocumentsP
         {canUpload ? (
           <section aria-labelledby="upload-title" className="workspace-upload">
             <h2 id="upload-title">Add a document</h2>
-            <DocumentUpload workspaceId={workspace.data.id} />
+            {/* The deployment's own limits when the policy loaded; the API
+                defaults only as a fallback for the hint text, since the API
+                still decides every upload. */}
+            <DocumentUpload
+              acceptedExtensions={
+                policy.ok ? policy.data.accepted_extensions : [...ACCEPTED_EXTENSIONS]
+              }
+              maxUploadBytes={policy.ok ? policy.data.max_upload_bytes : DEFAULT_MAX_UPLOAD_BYTES}
+              workspaceId={workspace.data.id}
+            />
           </section>
         ) : null}
       </main>

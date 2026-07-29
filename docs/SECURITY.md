@@ -144,8 +144,9 @@ membership is proven and row-level security is bound before any tenant row moves
 | --- | --- | --- |
 | `POST .../documents/{id}/archive` | `MANAGE_DOCUMENTS` | Reversible; audited as `document.archived` |
 | `POST .../documents/{id}/restore` | `MANAGE_DOCUMENTS` | Audited as `document.restored` |
-| `POST .../documents/{id}/retry` | `UPLOAD_DOCUMENTS` | Refused unless `status == FAILED`; never for a quarantined document |
-| `DELETE .../documents/{id}` | `MANAGE_DOCUMENTS` | Refused unless already archived; purges rows and stored bytes; audited as `document.deleted` |
+| `POST .../documents/{id}/retry` | `UPLOAD_DOCUMENTS` | Refused unless `status == FAILED`; never for a quarantined or permanently failed document |
+| `DELETE .../documents/{id}` | `MANAGE_DOCUMENTS` | Refused unless already archived and not mid-run; purges rows and every stored object; audited as `document.deleted` |
+| `GET .../documents/policy` | `VIEW` | Reports the deployment's effective upload limits |
 
 Security-relevant properties:
 
@@ -156,6 +157,24 @@ Security-relevant properties:
   contributing to answers immediately.
 - **Deletion is two-step and audited.** The audit row is written before the document row is deleted
   and survives it, because audit rows reference resources by id rather than by foreign key.
+- **Deletion purges rendered page images too.** When `INGESTION_STORE_PAGE_IMAGES` is on, ingestion
+  writes a PNG per page — pictures of the document's content. The cascade destroys the only record
+  of those keys, so they are collected before the rows are removed; otherwise a "permanent" deletion
+  would leave the document's pages readable in object storage indefinitely.
+- **Deletion cannot destabilise a worker.** It is refused while a job is `RUNNING`, because the
+  cascade would remove the row a worker is still writing stages to. That check and the cascade are
+  not atomic, so the worker also treats a vanished job as an abandoned one rather than asserting —
+  losing one document can never stop the ingestion process.
+- **State transitions are serialized.** Retry and delete read the document `FOR UPDATE`. The
+  worker's claim is a compare-and-set on a single job id, so it makes duplicate *delivery* safe but
+  does not deduplicate two distinct jobs; without the row lock, two concurrent retries would each
+  enqueue one and two workers would race over the same pages and chunks.
+- **Deterministic failures are not retryable.** A hash mismatch, an unparseable file, or a
+  provenance violation is recorded as `permanent_failure`, so a caller cannot queue unbounded runs
+  that are certain to fail identically on the same bytes.
+- **`retryable` is scoped to the caller.** The status endpoint reports whether *this* caller may
+  retry — state, permanence, and their own role — so it never advertises an action the same caller
+  would be refused.
 - **Non-members still learn nothing.** Every lifecycle route answers `workspace_not_found` for a
   non-member and `document_not_found` for another tenant's document id.
 
@@ -165,10 +184,27 @@ Security-relevant properties:
 Next.js route handlers that exchange the `httpOnly` session cookie for a bearer token server side.
 They are relays and never soften an API decision; regression tests pin that a 403 or 401 from the API
 is passed through unchanged. The upload relay forwards only the `file` part, so no client-supplied
-title or metadata becomes tenant content, and it rejects a body over `MAX_UPLOAD_BYTES` before
-relaying it. Presigned download URLs are minted per click, carry `Cache-Control: no-store`, and are
-never rendered into HTML, so they cannot be scraped from a page or survive in a cache. Cross-site
-requests cannot drive either handler because `SameSite=Lax` withholds the session cookie.
+title or metadata becomes tenant content.
+
+The upload relay carries two protections a server action would have provided for free:
+
+- **Origin is verified.** `SameSite=Lax` scopes the session cookie to the *site*, not the origin, so
+  in a deployment with an attacker-controlled sibling origin under the same registrable domain, a
+  script there could otherwise send a credentialed cross-origin upload and spend the victim's
+  workspace quota. The handler compares `Origin` against `X-Forwarded-Host`/`Host` and refuses a
+  request that does not match or omits `Origin` entirely. Next.js applies the equivalent check to
+  server actions itself; a route handler has to make it explicitly.
+- **The body is bounded before it is parsed.** `request.formData()` materializes the whole request in
+  memory, so checking the file's size afterwards is too late to stop concurrent oversized requests
+  from exhausting the process. `Content-Length` is checked first, and a request that declares no
+  length is refused with `411`.
+
+Both the relay and the browser take the size cap from `GET .../documents/policy` rather than a
+compiled-in constant, so raising or lowering `MAX_UPLOAD_BYTES` in a deployment cannot leave the web
+tier rejecting files the API accepts or advertising ones it will refuse.
+
+Presigned download URLs are minted per click, carry `Cache-Control: no-store`, and are never
+rendered into HTML, so they cannot be scraped from a page or survive in a cache.
 
 ### Error disclosure
 

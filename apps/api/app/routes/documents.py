@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Request, Response, UploadFile, status
 
 from app.auth import errors
 from app.auth.dependencies import SessionDep, get_app_settings
-from app.auth.permissions import WorkspaceAction
+from app.auth.permissions import WorkspaceAction, allows
 from app.auth.workspace import RequireAction, WorkspaceContext
 from app.config import Settings
 from app.db.models.enums import DocumentStatus
@@ -27,6 +27,8 @@ from app.documents.lifecycle import (
     DocumentArchivedError,
     DocumentNotFoundError,
     DocumentNotRetryableError,
+    DocumentPermanentlyFailedError,
+    DocumentProcessingError,
     archive_document,
     delete_document,
     restore_document,
@@ -39,11 +41,13 @@ from app.documents.service import (
     WorkspaceQuotaExceededError,
     store_new_document,
 )
+from app.documents.validation import MAX_FILENAME_LENGTH, accepted_extensions
 from app.ingestion.queue import JobQueue
 from app.schemas.documents import (
     DocumentProgressResponse,
     DocumentResponse,
     DownloadLinkResponse,
+    UploadPolicyResponse,
 )
 from app.security.events import log_security_event
 from app.storage.base import ObjectStorage
@@ -122,6 +126,23 @@ async def upload_document(
     return DocumentResponse.model_validate(document)
 
 
+@router.get("/policy", response_model=UploadPolicyResponse)
+async def upload_policy(
+    context: ViewerContext,
+    settings: SettingsDep,
+) -> UploadPolicyResponse:
+    """The upload limits this deployment enforces, for client-side fail-fast.
+
+    Declared before `/{document_id}` so the literal path is not captured as a
+    document id.
+    """
+    return UploadPolicyResponse(
+        max_upload_bytes=settings.max_upload_bytes,
+        max_filename_length=MAX_FILENAME_LENGTH,
+        accepted_extensions=list(accepted_extensions()),
+    )
+
+
 @router.get("", response_model=list[DocumentResponse])
 async def list_documents(
     context: ViewerContext,
@@ -167,7 +188,15 @@ async def document_progress(
         error=job.error if job else None,
         updated_at=job.updated_at if job else document.updated_at,
         archived=document.archived_at is not None,
-        retryable=document.archived_at is None and document.status is DocumentStatus.FAILED,
+        # Whether *this* caller can retry right now, so the field means the same
+        # thing as the endpoint's answer. A viewer holds no UPLOAD_DOCUMENTS, so
+        # reporting the state alone would promise an action they get a 403 for.
+        retryable=(
+            document.archived_at is None
+            and document.status is DocumentStatus.FAILED
+            and not (job is not None and job.permanent_failure)
+            and allows(context.membership.role, WorkspaceAction.UPLOAD_DOCUMENTS)
+        ),
     )
 
 
@@ -259,6 +288,8 @@ async def retry(
         raise errors.document_archived() from None
     except DocumentNotRetryableError:
         raise errors.document_not_retryable() from None
+    except DocumentPermanentlyFailedError:
+        raise errors.document_permanently_failed() from None
     return DocumentProgressResponse(
         document_id=job.document_id,
         status=DocumentStatus.PENDING,
@@ -292,4 +323,6 @@ async def delete(
         raise errors.document_not_found() from None
     except DeleteRequiresArchiveError:
         raise errors.document_delete_requires_archive() from None
+    except DocumentProcessingError:
+        raise errors.document_processing() from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)

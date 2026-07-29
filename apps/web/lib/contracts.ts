@@ -95,7 +95,8 @@ export const documentListSchema = z.array(documentSchema);
 
 /**
  * Lifecycle progress for one document. `retryable` is computed by the API from
- * server state, so the UI never has to reimplement when reprocessing is safe.
+ * server state *and the caller's role*, so the UI never has to reimplement when
+ * reprocessing is safe and never offers a button the caller would be refused.
  */
 export const documentProgressSchema = z.object({
   document_id: z.string(),
@@ -115,6 +116,20 @@ export const downloadLinkSchema = z.object({
   expires_in_seconds: z.number().int().positive(),
 });
 export type DownloadLink = z.infer<typeof downloadLinkSchema>;
+
+/**
+ * The upload limits the API deployment actually enforces.
+ *
+ * Fetched rather than mirrored: `max_upload_bytes` is per-environment
+ * configuration, so a compiled-in copy of the default would reject files a
+ * raised limit allows and advertise files a lowered limit refuses.
+ */
+export const uploadPolicySchema = z.object({
+  max_upload_bytes: z.number().int().positive(),
+  max_filename_length: z.number().int().positive(),
+  accepted_extensions: z.array(z.string()).nonempty(),
+});
+export type UploadPolicy = z.infer<typeof uploadPolicySchema>;
 
 /**
  * The API's stable error envelope: `{"detail": {"code", "message"}}`. Clients
@@ -157,6 +172,7 @@ export const errorCodes = {
 
 /** Local codes for failures that never reach the API. */
 export const clientErrorCodes = {
+  forbidden: "forbidden",
   invalidResponse: "invalid_api_response",
   network: "api_unreachable",
   uploadAborted: "upload_aborted",

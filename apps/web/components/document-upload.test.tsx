@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { DocumentUpload } from "./document-upload";
-import { MAX_UPLOAD_BYTES } from "../lib/upload-rules";
+import { ACCEPTED_EXTENSIONS, DEFAULT_MAX_UPLOAD_BYTES } from "../lib/upload-rules";
 
 const push = vi.fn();
 const refresh = vi.fn();
@@ -98,7 +98,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   FakeXhr.last = null;
   vi.stubGlobal("XMLHttpRequest", FakeXhr);
-  render(<DocumentUpload workspaceId={WORKSPACE_ID} />);
+  render(
+    <DocumentUpload
+      acceptedExtensions={[...ACCEPTED_EXTENSIONS]}
+      maxUploadBytes={DEFAULT_MAX_UPLOAD_BYTES}
+      workspaceId={WORKSPACE_ID}
+    />,
+  );
 });
 
 afterEach(() => {
@@ -217,7 +223,7 @@ describe("DocumentUpload", () => {
     expect(await screen.findByText("The file is empty.")).toBeInTheDocument();
     expect(FakeXhr.last).toBeNull();
 
-    await choose(pdf("huge.pdf", MAX_UPLOAD_BYTES + 1));
+    await choose(pdf("huge.pdf", DEFAULT_MAX_UPLOAD_BYTES + 1));
     expect(await screen.findByText(/exceeds the 25 MB upload limit/)).toBeInTheDocument();
     expect(FakeXhr.last).toBeNull();
 

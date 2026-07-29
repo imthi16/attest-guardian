@@ -16,6 +16,7 @@ import {
   memberListSchema,
   memberSchema,
   tokenPairSchema,
+  uploadPolicySchema,
   userSchema,
   workspaceListSchema,
   workspaceWithRoleSchema,
@@ -25,6 +26,7 @@ import {
   type Member,
   type MembershipRole,
   type TokenPair,
+  type UploadPolicy,
   type User,
   type WorkspaceWithRole,
 } from "./contracts";
@@ -143,6 +145,19 @@ export function removeMember(input: {
       input.userId,
     )}`,
     schema: noContentSchema,
+  });
+}
+
+/**
+ * The upload limits this deployment enforces.
+ *
+ * Read from the API so the browser and the upload relay fail fast against the
+ * deployed configuration rather than a compiled-in copy of the defaults.
+ */
+export function fetchUploadPolicy(workspaceId: string): Promise<AuthorizedResult<UploadPolicy>> {
+  return authorizedRequest({
+    path: `${documentsPath(workspaceId)}/policy`,
+    schema: uploadPolicySchema,
   });
 }
 

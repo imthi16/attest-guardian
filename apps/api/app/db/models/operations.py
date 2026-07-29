@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -66,5 +66,15 @@ class IngestionJob(WorkspaceOwnedModel):
     )
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     error: Mapped[str | None] = mapped_column(Text)
+    # Whether the failure was deterministic rather than transient. The worker
+    # maps both kinds to `FAILED`, but only a transient failure can plausibly
+    # succeed on the same bytes; a hash mismatch, an unparseable file, or a
+    # provenance violation will fail identically every time, so retry refuses
+    # them instead of letting a caller queue unbounded doomed runs.
+    permanent_failure: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

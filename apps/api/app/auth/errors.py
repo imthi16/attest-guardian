@@ -174,6 +174,25 @@ def document_not_retryable() -> HTTPException:
     )
 
 
+def document_permanently_failed() -> HTTPException:
+    """A deterministic failure cannot succeed on another run of the same bytes."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "document_permanently_failed",
+        "This document failed in a way that will not change on another attempt. "
+        "Upload a corrected file instead.",
+    )
+
+
+def document_processing() -> HTTPException:
+    """Deleting mid-run would pull the job row out from under a worker."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "document_processing",
+        "This document is being processed. Wait for it to finish before deleting it.",
+    )
+
+
 def document_delete_requires_archive() -> HTTPException:
     return _error(
         status.HTTP_409_CONFLICT,
