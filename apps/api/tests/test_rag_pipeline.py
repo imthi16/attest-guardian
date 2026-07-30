@@ -588,3 +588,44 @@ def test_domain_metadata_views_are_json_safe() -> None:
     citation_meta = meta["citation"]
     assert isinstance(citation_meta, dict)
     assert citation_meta["chunk_id"] == str(passage.chunk_id)
+
+
+def test_verifier_unrecorded_ocr_confidence_is_not_treated_as_perfect() -> None:
+    """An engine that recorded nothing has told us less, not more.
+
+    This is the third OCR state and the one most easily collapsed into the
+    others: `ocr_engine` set with `ocr_confidence` absent. Scoring it as
+    born-digital text would make the least verifiable evidence in a workspace
+    price identically to the most, and the decision policy's separate
+    `ocr_unknown_reliability` signal would be the only thing left that noticed.
+    """
+    from app.rag.verification import VerificationConfig
+
+    content = "invoice payment is due within thirty days"
+    candidate = CandidateClaim(
+        chunk_id=uuid.UUID(int=100),
+        text=content,
+        quote=content,
+        quote_char_start=0,
+        quote_char_end=len(content),
+    )
+    verifier = ClaimVerifier(config=VerificationConfig(min_confidence=0.0))
+    unknown = _passage(content, 0, ocr_engine="paddle", ocr_confidence=None)
+    good = _passage(content, 0, ocr_engine="paddle", ocr_confidence=0.95)
+    born_digital = _passage(content, 0, ocr_engine=None, ocr_confidence=None)
+
+    query = "invoice payment thirty days"
+    unknown_claims = verifier.verify(query, [candidate], [unknown])
+    good_claims = verifier.verify(query, [candidate], [good])
+    digital_claims = verifier.verify(query, [candidate], [born_digital])
+
+    assert unknown_claims and good_claims and digital_claims
+    assert unknown_claims[0].confidence < good_claims[0].confidence
+    assert unknown_claims[0].confidence < digital_claims[0].confidence
+    # Nor is it treated as worthless: a scan from an engine that reports no
+    # confidence is still usable evidence, and pricing it at zero would withhold
+    # answers from every document such an engine produced.
+    zero = _passage(content, 0, ocr_engine="paddle", ocr_confidence=0.0)
+    zero_claims = verifier.verify(query, [candidate], [zero])
+    assert zero_claims
+    assert zero_claims[0].confidence < unknown_claims[0].confidence

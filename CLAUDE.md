@@ -42,8 +42,9 @@ make lint                  # ruff check (api) + eslint --max-warnings=0 (web)
 make typecheck             # strict mypy (api) + next typegen && tsc --noEmit (web)
 make test                  # pytest (api, cov-fail-under=90) + vitest run --coverage (web, 90% thresholds)
 make build                 # next build
+make evaluate              # score the answer pipeline against evaluation/ (see docs/EVALUATION.md)
 make audit                 # pip-audit + npm audit --audit-level=high
-make check                 # format-check + lint + typecheck + test + build + compose-config — run before considering a change done
+make check                 # format-check + lint + typecheck + test + evaluate + build + compose-config — run before considering a change done
 make compose-build         # build non-root production api/web images
 ```
 
@@ -222,7 +223,28 @@ Repository layout and intended ownership per directory:
   (tracing/metrics/logging helpers) intended for reuse across `apps/*` and `services/*`.
 - `infra/` — Alembic migrations + row-level security (`infra/migrations`), dashboards/alerts
   (`infra/monitoring`).
-- `tests/` — cross-cutting `unit`, `integration`, `evaluation` (AI/retrieval regression) suites,
+- `evaluation/` — the versioned data the platform is scored against: `datasets/*.json`,
+  `thresholds.json` (every metric floor, in one file so lowering one is a legible diff),
+  `manifest.json` (a SHA-256 per dataset, verified on load — editing a dataset fails the
+  suite until `make evaluate-refresh`), and `reports/baseline.json` (asserted equal to a
+  fresh run, so the documented numbers cannot become fiction). The code that reads and
+  scores it is `apps/api/app/evaluation/`: `metrics.py` (an unmeasurable metric is `None`,
+  never `0.0` or `1.0` — otherwise an empty dataset clears a threshold), `harness.py`
+  (wires the *real* graph/generator/verifier/policy/resolver to the corpus, substituting
+  only the data layer), and `report.py` (`make evaluate`). Suites live in
+  `apps/api/tests/evaluation/`. `docs/EVALUATION.md` records the baseline, the known
+  gaps (abstention recall, deliberately left failing on the one hard case rather than
+  tuned away), and the two defects the framework found. One is still open: the
+  idiomatic `[^\W_]+` tokenizer in `app/rag/generation.py`, `app/rag/verification.py`,
+  `app/verification/signals.py`, `app/reranking/provider.py`, and
+  `app/embeddings/provider.py` **shatters Tamil words into bare consonants** (`\w`
+  excludes Unicode marks, and a Tamil vowel sign is one), so unrelated Tamil passages
+  score high lexical overlap. Use `app.language.tokenize`/`match_tokens` instead; the
+  harness already does. Switching the embedding provider changes every stored vector, so
+  that migration wants its own PR. The injection corpus is *shared*: `apps/api/tests/injection_corpus.py`
+  reads `evaluation/datasets/injection.json` so the detector's own suite and the
+  cross-cutting report can never disagree about its recall.
+- `tests/` — cross-cutting `unit`, `integration`, `evaluation` suites,
   distinct from the per-app test suites under `apps/api/tests` and `apps/web/**/*.test.tsx`.
 
 Local infra (`docker-compose.yml`): `postgres` (pgvector/pgvector image), `redis`, `minio`, and a

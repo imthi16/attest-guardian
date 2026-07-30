@@ -1,0 +1,168 @@
+{
+  "version": "2026-07-v1",
+  "description": "Labelled questions over corpus.json. `relevance` grades a chunk 2 when it answers the question and 1 when it is merely related; nDCG uses the grades and Recall@K uses grade 2 alone. `answerable` is stated rather than inferred, so a query with only grade-1 evidence can be labelled unanswerable — that is precisely the case abstention exists for. `expected_quote` is a fact the answer text must contain to count as correct, rather than the exact span the generator happens to quote.",
+  "queries": [
+    {
+      "query_id": "q-invoice-en",
+      "text": "invoice payment due date",
+      "language": "eng",
+      "answerable": true,
+      "relevance": { "alpha-invoice-terms": 2, "alpha-late-penalty": 1 },
+      "expected_quote": "thirty days",
+      "note": "English, born-digital, single clear answer"
+    },
+    {
+      "query_id": "q-penalty-tanglish",
+      "text": "payment penalty varum",
+      "language": "tanglish",
+      "answerable": true,
+      "relevance": { "alpha-late-penalty": 2, "alpha-invoice-terms": 1 },
+      "expected_quote": "penalty",
+      "note": "Tanglish query against a Tanglish passage"
+    },
+    {
+      "query_id": "q-payment-tanglish",
+      "text": "thirty days la payment pannanum",
+      "language": "tanglish",
+      "answerable": true,
+      "relevance": { "alpha-late-penalty": 2, "alpha-invoice-terms": 1 },
+      "expected_quote": "thirty days",
+      "note": "Tanglish query whose answer also exists in English"
+    },
+    {
+      "query_id": "q-refund-en",
+      "text": "refund processing time business days",
+      "language": "eng",
+      "answerable": true,
+      "relevance": { "alpha-refunds": 2 },
+      "expected_quote": "five business days",
+      "note": "English, one supporting passage only"
+    },
+    {
+      "query_id": "q-leave-en",
+      "text": "annual leave carries over",
+      "language": "eng",
+      "answerable": true,
+      "relevance": { "alpha-leave-accrual": 2, "alpha-leave-accrual-tamil": 1 },
+      "expected_quote": "carries over",
+      "note": "English question whose topic also appears in Tamil"
+    },
+    {
+      "query_id": "q-leave-ta",
+      "text": "விடுப்பு ஒவ்வொரு மாதமும் சேர்க்கப்படும்",
+      "language": "tam",
+      "answerable": true,
+      "relevance": { "alpha-leave-accrual-tamil": 2, "alpha-leave-accrual": 1 },
+      "expected_quote": "விடுப்பு",
+      "note": "Tamil question against a Tamil passage"
+    },
+    {
+      "query_id": "q-contract-ta",
+      "text": "ஒப்பந்தம் முடிவடைகிறது மார்ச்",
+      "language": "tam",
+      "answerable": true,
+      "relevance": { "alpha-contract-end-tamil": 2 },
+      "expected_quote": "மார்ச்",
+      "note": "Tamil question about a contract term"
+    },
+    {
+      "query_id": "q-notice-en",
+      "text": "terminate agreement written notice",
+      "language": "eng",
+      "answerable": true,
+      "relevance": { "alpha-notice-period": 2 },
+      "expected_quote": "ninety days",
+      "note": "English; a near-identical passage exists in another workspace with a different figure"
+    },
+    {
+      "query_id": "q-warranty-scanned",
+      "text": "warranty manufacturing defects months",
+      "language": "eng",
+      "answerable": true,
+      "relevance": { "alpha-warranty-scanned": 2 },
+      "expected_quote": "twenty-four months",
+      "note": "Scanned page read with high OCR confidence"
+    },
+    {
+      "query_id": "q-shipping-scanned",
+      "text": "shipping charges refundable",
+      "language": "eng",
+      "answerable": true,
+      "relevance": { "alpha-total-scanned": 2 },
+      "expected_quote": "not refundable",
+      "note": "Scanned page read with low OCR confidence; the answer must be no more certain than the reading"
+    },
+    {
+      "query_id": "q-service-scanned-ta",
+      "text": "பழுது பார்க்கும் சேவை",
+      "language": "tam",
+      "answerable": true,
+      "relevance": { "alpha-support-scanned-tamil": 2 },
+      "expected_quote": "சேவை",
+      "note": "Scanned Tamil page whose engine recorded no confidence at all"
+    },
+    {
+      "query_id": "q-unanswerable-sport",
+      "text": "who won the football world cup",
+      "language": "eng",
+      "answerable": false,
+      "relevance": {},
+      "expected_quote": null,
+      "note": "Entirely outside the corpus; answering at all is a failure"
+    },
+    {
+      "query_id": "q-unanswerable-recipe",
+      "text": "recipe for chocolate cake",
+      "language": "eng",
+      "answerable": false,
+      "relevance": {},
+      "expected_quote": null,
+      "note": "Entirely outside the corpus"
+    },
+    {
+      "query_id": "q-unanswerable-related",
+      "text": "what is the training budget for the marketing team",
+      "language": "eng",
+      "answerable": false,
+      "relevance": { "alpha-training-mention": 1 },
+      "expected_quote": null,
+      "note": "Related material exists but does not answer the question: the hard abstention case, where retrieval succeeds and the answer must still be withheld"
+    },
+    {
+      "query_id": "q-unanswerable-ta",
+      "text": "விமான டிக்கெட் விலை எவ்வளவு",
+      "language": "tam",
+      "answerable": false,
+      "relevance": {},
+      "expected_quote": null,
+      "note": "Tamil question entirely outside the corpus. Abstention measured only in English would stay green while Tamil normalization or retrieval regressed"
+    },
+    {
+      "query_id": "q-unanswerable-related-ta",
+      "text": "விடுப்பு ரத்து செய்தால் என்ன நடக்கும்",
+      "language": "tam",
+      "answerable": false,
+      "relevance": { "alpha-leave-accrual-tamil": 1 },
+      "expected_quote": null,
+      "note": "Tamil question whose topic is covered but whose answer is not: the hard abstention case in Tamil script"
+    },
+    {
+      "query_id": "q-unanswerable-tanglish",
+      "text": "office la parking spot irukka",
+      "language": "tanglish",
+      "answerable": false,
+      "relevance": {},
+      "expected_quote": null,
+      "note": "Tanglish question outside the corpus; transliteration must not manufacture a match"
+    },
+    {
+      "query_id": "q-unanswerable-related-tanglish",
+      "text": "payment late aana account close pannuvangala",
+      "language": "tanglish",
+      "answerable": false,
+      "relevance": { "alpha-late-penalty": 1 },
+      "expected_quote": null,
+      "note": "Tanglish question about a covered topic with an uncovered answer: the hard abstention case in Latin script"
+    }
+  ]
+}

@@ -7,7 +7,7 @@ WEB_DIR := apps/web
 API_VENV := $(API_DIR)/.venv
 API_BIN := $(API_VENV)/bin
 
-.PHONY: help install install-api install-web hooks dev-api dev-web demo-api format format-check lint typecheck test build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
+.PHONY: help install install-api install-web hooks dev-api dev-web demo-api format format-check lint typecheck test evaluate evaluate-write evaluate-refresh build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
 
 help: ## Show available development commands.
 	@awk 'BEGIN {FS = ":.*## "; printf "Attest Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -55,6 +55,15 @@ test: ## Run backend and frontend tests with coverage thresholds.
 	cd $(API_DIR) && .venv/bin/pytest
 	npm --prefix $(WEB_DIR) run test:coverage
 
+evaluate: ## Score the pipeline against the versioned datasets and print the report.
+	cd $(API_DIR) && .venv/bin/python -m app.evaluation.report
+
+evaluate-write: ## Regenerate the committed baseline report after an intended change.
+	cd $(API_DIR) && .venv/bin/python -m app.evaluation.report --write
+
+evaluate-refresh: ## Re-record dataset digests after deliberately editing a dataset.
+	cd $(API_DIR) && .venv/bin/python -m app.evaluation.datasets --refresh
+
 build: ## Create the production frontend build.
 	npm --prefix $(WEB_DIR) run build
 
@@ -62,7 +71,7 @@ audit: ## Audit installed Python and locked npm dependencies.
 	$(API_BIN)/pip-audit --skip-editable
 	npm --prefix $(WEB_DIR) audit --audit-level=high
 
-check: format-check lint typecheck test build compose-config ## Run the primary local quality suite.
+check: format-check lint typecheck test evaluate build compose-config ## Run the primary local quality suite.
 
 infra-up: ## Start PostgreSQL, Redis, MinIO, and bucket initialization.
 	docker compose up -d --wait postgres redis minio

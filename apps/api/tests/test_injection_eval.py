@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from app.safety import assess_text
 from app.safety.types import SafetyDecision
 
-from tests.injection_corpus import CORPUS_VERSION, attacks, benign
+from tests.injection_corpus import attacks, benign, corpus_version
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,8 @@ def _evaluate() -> _Metrics:
 
 
 def test_corpus_version_is_pinned() -> None:
-    assert CORPUS_VERSION == "2026-07-v2"
+    """The corpus declares its own version; this pins which one the suite scores."""
+    assert corpus_version() == "2026-07-v2"
 
 
 def test_attack_recall_meets_floor() -> None:

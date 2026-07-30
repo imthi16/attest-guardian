@@ -60,6 +60,15 @@ class VerificationConfig:
     overlap_weight: float = 0.30
     ocr_weight: float = 0.10
     min_confidence: float = 0.3
+    # What an OCR reading with *no* recorded confidence is worth. Unknown
+    # reliability is not high reliability: the engine read the page and declined
+    # to say how well, which is strictly less information than a measured score.
+    # Scoring it as born-digital text would make the least-verifiable evidence
+    # in the corpus indistinguishable from the most. Deliberately not `0.0`
+    # either — the reading may well be fine, and treating it as worthless would
+    # withhold answers from every scan produced by an engine that reports no
+    # confidence at all.
+    unknown_ocr_confidence: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -188,8 +197,9 @@ class ClaimVerifier:
         never used. The rerank contribution uses the reranker's *absolute* raw
         score, not the within-set normalized rank (which maps the top candidate
         to 1.0 regardless of relevance and would let a weak-but-least-bad match
-        cross the support floor). OCR confidence only participates when the
-        chunk came from OCR; for born-digital text it is treated as reliable.
+        cross the support floor). OCR confidence participates only for text that
+        came from OCR; born-digital text was read exactly, and OCR text that
+        carries no recorded confidence is scored as unknown rather than as good.
         """
         cfg = self._config
         fused = _clamp(passage.fused_score)
@@ -199,13 +209,18 @@ class ClaimVerifier:
         else:
             rerank = fused
         overlap = self._overlap(query_tokens, candidate.quote)
-        # A born-digital chunk (no OCR engine) is fully reliable; an OCR chunk
-        # uses its confidence verbatim, including a genuine 0.0 — treating a
-        # missing value as perfect would inflate the least-reliable evidence.
-        if passage.ocr_engine and passage.ocr_confidence is not None:
-            ocr = _clamp(passage.ocr_confidence)
-        else:
+        # Three distinct cases, and collapsing the last two is how the least
+        # verifiable evidence in a workspace comes to look like the most:
+        # born-digital text was read exactly; an OCR chunk with a recorded
+        # confidence is worth that number verbatim, including a genuine 0.0; and
+        # an OCR chunk whose engine recorded *nothing* is of unknown quality,
+        # which is less information than a measured score rather than more.
+        if not passage.ocr_engine:
             ocr = 1.0
+        elif passage.ocr_confidence is None:
+            ocr = _clamp(cfg.unknown_ocr_confidence)
+        else:
+            ocr = _clamp(passage.ocr_confidence)
 
         weights = (cfg.fused_weight, cfg.rerank_weight, cfg.overlap_weight, cfg.ocr_weight)
         signals = (fused, rerank, overlap, ocr)

@@ -1,0 +1,182 @@
+{
+  "version": "2026-07-v1",
+  "description": "Synthetic evidence passages across English, Tamil, and Tanglish, including scanned (OCR-derived) pages. Two workspaces so tenant isolation can be probed. No real document, personal data, or credential appears anywhere in this file.",
+  "chunks": [
+    {
+      "chunk_id": "alpha-invoice-terms",
+      "workspace": "alpha",
+      "document": "alpha-supply-agreement",
+      "text": "The invoice payment is due within thirty days of receipt.",
+      "language": "eng",
+      "page_number": 2,
+      "section": "Payment terms",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-late-penalty",
+      "workspace": "alpha",
+      "document": "alpha-supply-agreement",
+      "text": "Payment thirty days la pannanum, illena two percent penalty varum.",
+      "language": "tanglish",
+      "page_number": 2,
+      "section": "Payment terms",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-refunds",
+      "workspace": "alpha",
+      "document": "alpha-supply-agreement",
+      "text": "Refunds are processed within five business days of an approved request.",
+      "language": "eng",
+      "page_number": 3,
+      "section": "Refunds",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-leave-accrual",
+      "workspace": "alpha",
+      "document": "alpha-employee-handbook",
+      "text": "Annual leave accrues monthly and carries over once.",
+      "language": "eng",
+      "page_number": 11,
+      "section": "Leave",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-leave-accrual-tamil",
+      "workspace": "alpha",
+      "document": "alpha-employee-handbook",
+      "text": "ஊழியர் விடுப்பு ஒவ்வொரு மாதமும் சேர்க்கப்படும்.",
+      "language": "tam",
+      "page_number": 12,
+      "section": "Leave",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-contract-end-tamil",
+      "workspace": "alpha",
+      "document": "alpha-supply-agreement",
+      "text": "இந்த ஒப்பந்தம் மார்ச் மாதம் முடிவடைகிறது.",
+      "language": "tam",
+      "page_number": 1,
+      "section": "Term",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-notice-period",
+      "workspace": "alpha",
+      "document": "alpha-supply-agreement",
+      "text": "Either party may terminate this agreement with ninety days written notice.",
+      "language": "eng",
+      "page_number": 4,
+      "section": "Termination",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-retention",
+      "workspace": "alpha",
+      "document": "alpha-employee-handbook",
+      "text": "Uploaded documents are retained for seven years and then deleted.",
+      "language": "eng",
+      "page_number": 18,
+      "section": "Records",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-password-policy",
+      "workspace": "alpha",
+      "document": "alpha-employee-handbook",
+      "text": "The security guidelines require employees to reset passwords every ninety days.",
+      "language": "eng",
+      "page_number": 20,
+      "section": "Security",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-warranty-scanned",
+      "workspace": "alpha",
+      "document": "alpha-scanned-warranty",
+      "text": "The warranty covers manufacturing defects for twenty-four months.",
+      "language": "eng",
+      "page_number": 1,
+      "section": "Warranty",
+      "ocr_engine": "tesseract",
+      "ocr_confidence": 0.91
+    },
+    {
+      "chunk_id": "alpha-total-scanned",
+      "workspace": "alpha",
+      "document": "alpha-scanned-warranty",
+      "text": "Shipping charges are billed separately and are not refundable.",
+      "language": "eng",
+      "page_number": 2,
+      "section": "Charges",
+      "ocr_engine": "tesseract",
+      "ocr_confidence": 0.42
+    },
+    {
+      "chunk_id": "alpha-support-scanned-tamil",
+      "workspace": "alpha",
+      "document": "alpha-scanned-warranty",
+      "text": "பழுது பார்க்கும் சேவை உள்ளூர் மையத்தில் வழங்கப்படும்.",
+      "language": "tam",
+      "page_number": 3,
+      "section": "Service",
+      "ocr_engine": "tesseract",
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "alpha-training-mention",
+      "workspace": "alpha",
+      "document": "alpha-employee-handbook",
+      "text": "Training budgets are agreed with each team at the start of the year.",
+      "language": "eng",
+      "page_number": 15,
+      "section": "Development",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "beta-invoice-terms",
+      "workspace": "beta",
+      "document": "beta-supply-agreement",
+      "text": "The invoice payment is due within sixty days of receipt.",
+      "language": "eng",
+      "page_number": 2,
+      "section": "Payment terms",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "beta-notice-period",
+      "workspace": "beta",
+      "document": "beta-supply-agreement",
+      "text": "Either party may terminate this agreement with thirty days written notice.",
+      "language": "eng",
+      "page_number": 4,
+      "section": "Termination",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    },
+    {
+      "chunk_id": "beta-leave-accrual",
+      "workspace": "beta",
+      "document": "beta-employee-handbook",
+      "text": "Annual leave accrues weekly and does not carry over.",
+      "language": "eng",
+      "page_number": 11,
+      "section": "Leave",
+      "ocr_engine": null,
+      "ocr_confidence": null
+    }
+  ]
+}
