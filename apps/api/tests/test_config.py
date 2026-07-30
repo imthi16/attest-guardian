@@ -147,3 +147,26 @@ def test_production_accepts_https_cors_origin() -> None:
     )
 
     assert settings.cors_origins() == ["https://app.example.com"]
+
+
+def test_a_retired_embedding_version_is_refused_at_startup() -> None:
+    """A stale version label is the one embedding mistake nothing downstream catches.
+
+    `EMBEDDING_MODEL_VERSION` salts the hashing trick *and* scopes every vector
+    search, so a deployment that keeps `hashing-v1` while running the corrected
+    tokenizer compares whole-word query vectors against consonant-fragment
+    stored vectors — under one name, so the search matches happily and returns
+    plausible neighbours. There is no error to observe and no metric that moves.
+
+    Defaulting the setting is not enough: an explicit value in `.env` overrides
+    the default, which is exactly how a deployment that upgraded its code but
+    kept its configuration would arrive here.
+    """
+    with pytest.raises(ValidationError, match="retired"):
+        Settings(embedding_model_version="hashing-v1", _env_file=None)
+
+
+def test_the_current_embedding_version_is_accepted() -> None:
+    settings = Settings(embedding_model_version="hashing-v2", _env_file=None)
+
+    assert settings.embedding_model_version == "hashing-v2"

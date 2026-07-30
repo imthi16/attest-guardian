@@ -66,12 +66,28 @@ The committed `.env.example` contains non-secret local defaults only.
 > vector space, and `ChunkEmbeddingRepository.search` filters on it, so it also scopes every
 > query. Any change to how text becomes features — a tokenizer, a normalizer, the feature set —
 > must move it, or vectors written under the old behaviour keep being compared against queries
-> embedded under the new one and return silently wrong neighbours. Moving it is safe but not
-> free: vectors at the previous version stop matching, so dense retrieval returns nothing for
-> those chunks until they are re-embedded. Lexical retrieval is unaffected, so fused results
-> degrade rather than disappear. `hashing-v1` → `hashing-v2` accompanied the Tamil tokenizer
-> correction; a workspace ingested before it needs its documents re-processed to restore dense
-> recall.
+> embedded under the new one and return silently wrong neighbours. Setting it back to a retired
+> value is refused at startup for that reason: the failure it prevents produces plausible
+> results rather than an error, so nothing downstream would ever report it.
+
+### Re-embedding after a version change
+
+Moving the version is safe but not free. Vectors at the previous version stop matching, so **dense
+retrieval returns nothing for chunks embedded before the change** until they are re-embedded.
+Lexical retrieval is unaffected and fusion still runs, so results degrade rather than disappear —
+recall drops, and answers that depended on semantic matching may start abstaining.
+
+**There is currently no first-class reindex.** `retry_ingestion` accepts only `FAILED` documents by
+design (a second run over a `READY` document would race the first over the same rows), so a
+`READY` document cannot be re-embedded through the API. The only path today is to archive the
+document, delete it, and upload it again — the per-workspace SHA-256 dedupe is keyed on the
+document row, so re-upload succeeds once the row is gone. That is heavy, and it loses the
+document's id and history.
+
+A reindex operation that re-runs the embed stage for documents at a stale version is the right fix
+and is not in this release. Until it exists, plan a version change as a re-ingestion of the
+workspace, not as a configuration edit. `hashing-v1` → `hashing-v2` accompanied the Tamil tokenizer
+correction and is the first instance of this.
 
 Injection thresholds are conservative by construction: a document is quarantined when *any* of its
 chunks crosses the quarantine bar, and quarantined content is excluded from retrieval as well as

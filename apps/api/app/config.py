@@ -14,6 +14,16 @@ _UNSAFE_JWT_SECRETS = {
 }
 _MIN_DEPLOYED_JWT_SECRET_LENGTH = 32
 
+# Embedding versions whose vectors were produced by behaviour the code no
+# longer has. `hashing-v1` predates the Tamil tokenizer correction: its stored
+# vectors are built from consonant fragments. Because the version both salts
+# the hash *and* scopes every vector search, a deployment that keeps the label
+# while running the new tokenizer would compare whole-word query vectors
+# against fragment vectors under one name — the exact silent mismatch the bump
+# exists to prevent, and one that no test or metric would surface. Defaulting
+# the value is not enough, because an explicit `.env` overrides the default.
+_RETIRED_EMBEDDING_VERSIONS = {"hashing-v1"}
+
 
 def _find_repository_env(module_path: Path) -> Path | None:
     """Locate the repository `.env` without assuming a source-tree depth."""
@@ -127,6 +137,23 @@ class Settings(BaseSettings):
             if self.s3_secret_key.get_secret_value() == "minio123":
                 msg = "S3_SECRET_KEY must be replaced in staging and production"
                 raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def enforce_embedding_version(self) -> Self:
+        """Refuse a version whose stored vectors no longer match how text is read.
+
+        Fails at startup rather than at query time: a mismatched vector space
+        returns plausible neighbours rather than an error, so nothing downstream
+        would ever notice.
+        """
+        if self.embedding_model_version in _RETIRED_EMBEDDING_VERSIONS:
+            msg = (
+                f"EMBEDDING_MODEL_VERSION {self.embedding_model_version!r} is retired: its "
+                "vectors were built by a tokenizer this code no longer has. Set a new version "
+                "and re-ingest the affected documents (see docs/CONFIGURATION.md)."
+            )
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
