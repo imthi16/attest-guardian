@@ -71,8 +71,8 @@ def seed_at_0014(url: str) -> None:
             """
             INSERT INTO documents
                 (id, workspace_id, created_by, title, source_filename, mime_type,
-                 size_bytes, sha256)
-            VALUES ($1, $2, $3, 'Lease', 'lease.pdf', 'application/pdf', 1024, $4)
+                 size_bytes, sha256, status)
+            VALUES ($1, $2, $3, 'Lease', 'lease.pdf', 'application/pdf', 1024, $4, 'ready')
             """,
             [document_id, workspace_id, user_id, "a" * 64],
         ),
