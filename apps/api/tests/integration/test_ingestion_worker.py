@@ -6,7 +6,7 @@ committed database (plus real Redis and MinIO from `make infra-up`).
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -20,7 +20,7 @@ from app.ingestion.scanner import EICAR_SIGNATURE, SignatureScanner
 from app.ingestion.worker import IngestionWorker
 from app.storage.base import ObjectStorage
 from app.storage.s3 import S3ObjectStorage
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -191,6 +191,9 @@ class FlakyStorage:
 
     async def delete_object(self, key: str) -> None:
         await self._inner.delete_object(key)
+
+    async def list_keys(self, prefix: str) -> Sequence[str]:
+        return await self._inner.list_keys(prefix)
 
     async def presigned_get_url(self, key: str, expires_in_seconds: int) -> str:
         return await self._inner.presigned_get_url(key, expires_in_seconds)
@@ -383,6 +386,9 @@ async def test_integrity_mismatch_fails_permanently(
     assert job.attempts == 1
     assert "hash" in (job.error or "")
     assert document.status is DocumentStatus.FAILED
+    # Recorded as deterministic so the retry endpoint refuses it: the same
+    # stored bytes would mismatch the same way on every future attempt.
+    assert job.permanent_failure is True
     assert await queue.list_dead() == [seeded.message]
 
 
@@ -425,6 +431,9 @@ async def test_exhausted_retries_dead_letter(
     assert job.status is IngestionStatus.FAILED
     assert job.attempts == 2
     assert document.status is DocumentStatus.FAILED
+    # Exhausted, not deterministic: another run on the same bytes could still
+    # succeed once the transient cause clears, so a retry stays available.
+    assert job.permanent_failure is False
     assert await queue.list_dead() == [seeded.message]
     assert await queue.dequeue(0) is None
 
@@ -474,3 +483,66 @@ async def test_requeue_stale_recovers_crashed_and_orphaned_jobs(
         job, document = await load_state(factory, seeded)
         assert job.status is IngestionStatus.SUCCEEDED
         assert document.status is DocumentStatus.READY
+
+
+class VanishingJobStorage:
+    """Deletes the job row mid-run, as a permanent deletion's cascade would."""
+
+    def __init__(self, inner: ObjectStorage, factory: async_sessionmaker[AsyncSession]) -> None:
+        self._inner = inner
+        self._factory = factory
+        self.triggered = False
+
+    async def put_object(self, key: str, data: bytes, content_type: str) -> None:
+        await self._inner.put_object(key, data, content_type)
+
+    async def get_object(self, key: str) -> bytes:
+        if not self.triggered:
+            self.triggered = True
+            async with self._factory() as session:
+                await session.execute(delete(IngestionJob))
+                await session.commit()
+        return await self._inner.get_object(key)
+
+    async def delete_object(self, key: str) -> None:
+        await self._inner.delete_object(key)
+
+    async def list_keys(self, prefix: str) -> Sequence[str]:
+        return await self._inner.list_keys(prefix)
+
+    async def presigned_get_url(self, key: str, expires_in_seconds: int) -> str:
+        return await self._inner.presigned_get_url(key, expires_in_seconds)
+
+
+async def test_job_deleted_mid_run_does_not_stop_the_worker(
+    factory: async_sessionmaker[AsyncSession],
+    storage: S3ObjectStorage,
+    queue: RedisJobQueue,
+) -> None:
+    """A document deleted under a running job must not take the worker down.
+
+    The API refuses deletion while a job is `RUNNING`, but that check and the
+    cascade are not one atomic step. Recording the outcome then finds no row;
+    asserting there would raise from inside an exception handler, escape
+    `run_forever`, and stop the process over one deleted document.
+    """
+    seeded = await seed_job(factory, storage)
+    await queue.enqueue(seeded.message)
+    vanishing = VanishingJobStorage(storage, factory)
+    worker = build_worker(factory, vanishing, queue)
+
+    # The job is claimed, its row disappears mid-stage, and the worker returns
+    # normally instead of raising.
+    assert await worker.process_next(0) is True
+    assert vanishing.triggered is True
+
+    async with factory() as session:
+        assert (await session.scalars(select(IngestionJob))).first() is None
+
+    # And it keeps consuming: the next job still runs to completion.
+    followup = await seed_job(factory, storage, filename="after-deletion.pdf")
+    await queue.enqueue(followup.message)
+    assert await worker.process_next(0) is True
+    job, document = await load_state(factory, followup)
+    assert job.status is IngestionStatus.SUCCEEDED
+    assert document.status is DocumentStatus.READY

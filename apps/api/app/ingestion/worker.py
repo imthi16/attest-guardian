@@ -36,6 +36,8 @@ from app.db.models.enums import DocumentStatus, IngestionStage, IngestionStatus
 from app.db.models.operations import IngestionJob
 from app.db.repositories.audit import AuditLogRepository
 from app.db.session import bind_workspace, session_scope
+from app.documents.keys import page_image_key
+from app.documents.purge import run_pending_purges
 from app.documents.validation import UploadRejectedError, detect_kind, verify_content
 from app.ingestion.queue import JobMessage, JobQueue
 from app.ingestion.scanner import MalwareScanner
@@ -60,6 +62,18 @@ _PLACEHOLDER_STAGES = (
     IngestionStage.EMBEDDING,
     IngestionStage.INDEXING,
 )
+
+
+class JobVanishedError(Exception):
+    """The job row disappeared while this worker was processing it.
+
+    Permanent deletion refuses to run while a job is queued or claimed, so this
+    is not the ordinary path — but the check and the cascade are not one atomic
+    step, and a row can also be removed administratively. Losing the row means
+    there is nothing left to record the outcome on, so the worker abandons the
+    job quietly instead of failing on an assertion and taking the process down
+    with it.
+    """
 
 
 class QuarantinedError(Exception):
@@ -128,6 +142,11 @@ class IngestionWorker:
             return
         try:
             await self._run_stages(message)
+        except JobVanishedError:
+            logger.info(
+                "job row vanished mid-flight; nothing left to record",
+                extra={"job_id": str(message.job_id)},
+            )
         except QuarantinedError as verdict:
             await self._quarantine(message, verdict.reason)
         except PermanentIngestionError as error:
@@ -137,11 +156,48 @@ class IngestionWorker:
         else:
             await self._finish(message)
 
+    async def _lock_job_and_document(
+        self,
+        session: AsyncSession,
+        job_id: uuid.UUID,
+    ) -> tuple[IngestionJob | None, Document | None]:
+        """Lock a job and its document, document first, and return both.
+
+        The order matters and is a repository-wide invariant: the lifecycle's
+        retry and permanent-delete paths lock the *document* and then touch its
+        jobs, so a worker that locked the job row first would deadlock with them.
+        PostgreSQL would then abort one of the two — the worker at a point where
+        it cannot record anything, or the delete request as a 500.
+
+        Locking the document first also makes the delete-time "is a job running?"
+        check meaningful. Holding that lock, a delete blocks any claim, so a job
+        it saw as merely `QUEUED` cannot become `RUNNING` behind its back; and a
+        claim that arrives after the cascade finds no job row and drops the
+        message.
+
+        The job's `document_id` is read without a lock only to find *which*
+        document to lock; it never changes for a given job.
+        """
+        document_id = await session.scalar(
+            select(IngestionJob.document_id).where(IngestionJob.id == job_id)
+        )
+        document = (
+            None
+            if document_id is None
+            else await session.scalar(
+                select(Document).where(Document.id == document_id).with_for_update()
+            )
+        )
+        job = await session.scalar(
+            select(IngestionJob).where(IngestionJob.id == job_id).with_for_update()
+        )
+        return job, document
+
     async def _claim(self, message: JobMessage) -> bool:
         """Compare-and-set QUEUED -> RUNNING; anything else is a duplicate."""
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
-            job = await session.get(IngestionJob, message.job_id, with_for_update=True)
+            job, document = await self._lock_job_and_document(session, message.job_id)
             if job is None:
                 logger.warning("ingestion job missing", extra={"job_id": str(message.job_id)})
                 return False
@@ -155,7 +211,6 @@ class IngestionWorker:
             job.started_at = datetime.now(UTC)
             job.attempts += 1
             job.error = None
-            document = await session.get(Document, job.document_id)
             if document is not None:
                 document.status = DocumentStatus.PROCESSING
             logger.info(
@@ -181,7 +236,8 @@ class IngestionWorker:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
             job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above, row cannot vanish
+            if job is None:
+                raise JobVanishedError
             job.stage = stage
         logger.info(
             "stage reached",
@@ -193,7 +249,8 @@ class IngestionWorker:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
             job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            if job is None:
+                raise JobVanishedError
             document = await session.get(Document, job.document_id)
             if document is None:
                 msg = "document row is gone"
@@ -274,9 +331,15 @@ class IngestionWorker:
                 continue
             image_png = render_pdf_page_png(content.data, page.page_number)
             if self._store_page_images:
-                image_key = (
-                    f"workspaces/{message.workspace_id}/documents/{content.document_id}"
-                    f"/pages/v{content.version_number}/p{page.page_number}.png"
+                # Built from the shared key module so the object lands under the
+                # document prefix a permanent deletion purges: this write
+                # precedes the `pages` row that records it, so a run that fails
+                # here leaves content the database never learns about.
+                image_key = page_image_key(
+                    message.workspace_id,
+                    content.document_id,
+                    version_number=content.version_number,
+                    page_number=page.page_number,
                 )
                 await self._storage.put_object(image_key, image_png, "image/png")
                 page.image_storage_key = image_key
@@ -424,12 +487,19 @@ class IngestionWorker:
     async def _finish(self, message: JobMessage) -> None:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
-            job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            # Document before job, as everywhere that writes both rows.
+            job, document = await self._lock_job_and_document(session, message.job_id)
+            if job is None:
+                # Terminal handler: there is no row left to mark, and raising
+                # here would escape `process` (this runs in its `else` branch).
+                logger.info(
+                    "job row vanished before completion could be recorded",
+                    extra={"job_id": str(message.job_id)},
+                )
+                return
             job.status = IngestionStatus.SUCCEEDED
             job.stage = IngestionStage.READY
             job.finished_at = datetime.now(UTC)
-            document = await session.get(Document, job.document_id)
             if document is not None:
                 document.status = DocumentStatus.READY
             await AuditLogRepository(session).record(
@@ -443,12 +513,16 @@ class IngestionWorker:
     async def _quarantine(self, message: JobMessage, reason: str) -> None:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
-            job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            job, document = await self._lock_job_and_document(session, message.job_id)
+            if job is None:
+                logger.info(
+                    "job row vanished before quarantine could be recorded",
+                    extra={"job_id": str(message.job_id)},
+                )
+                return
             job.status = IngestionStatus.FAILED
             job.error = f"quarantined: {reason}"
             job.finished_at = datetime.now(UTC)
-            document = await session.get(Document, job.document_id)
             if document is not None:
                 document.status = DocumentStatus.QUARANTINED
             await AuditLogRepository(session).record(
@@ -486,16 +560,26 @@ class IngestionWorker:
     async def _fail(self, message: JobMessage, error: str, *, retry: bool) -> None:
         async with session_scope(self._factory) as session:
             await bind_workspace(session, message.workspace_id)
-            job = await session.get(IngestionJob, message.job_id)
-            assert job is not None  # noqa: S101 - claimed above
+            job, document = await self._lock_job_and_document(session, message.job_id)
+            if job is None:
+                # The document was deleted under this job. Asserting here would
+                # raise from inside an exception handler and escape
+                # `run_forever`, stopping the worker over one deleted document.
+                logger.info(
+                    "job row vanished before failure could be recorded",
+                    extra={"job_id": str(message.job_id)},
+                )
+                return
             job.error = error
             will_retry = retry and job.attempts < self._max_attempts
             if will_retry:
                 job.status = IngestionStatus.QUEUED
             else:
                 job.status = IngestionStatus.FAILED
+                # A deterministic failure is recorded as such so the retry
+                # endpoint can refuse it: the same bytes would fail identically.
+                job.permanent_failure = not retry
                 job.finished_at = datetime.now(UTC)
-                document = await session.get(Document, job.document_id)
                 if document is not None:
                     document.status = DocumentStatus.FAILED
                 await AuditLogRepository(session).record(
@@ -556,12 +640,23 @@ class IngestionWorker:
             )
         return len(messages)
 
+    async def purge_deleted_content(self) -> int:
+        """Finish the storage half of any permanent deletions awaiting a purge.
+
+        Permanent deletion commits its row removal with a durable purge record
+        and performs no storage call itself, so something has to complete it;
+        the worker is that something. Failures leave the record pending, so the
+        next idle pass tries again.
+        """
+        return await run_pending_purges(session_factory=self._factory, storage=self._storage)
+
     async def run_forever(self, *, idle_timeout_seconds: float = 5.0) -> None:
-        """Consume jobs until cancelled, periodically recovering stale ones."""
+        """Consume jobs until cancelled; recover stale jobs and purge when idle."""
         while True:
             worked = await self.process_next(idle_timeout_seconds)
             if not worked:
                 await self.requeue_stale()
+                await self.purge_deleted_content()
 
 
 def _main() -> None:

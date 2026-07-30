@@ -57,6 +57,15 @@ _ACCEPTED_MIME: dict[DocumentKind, frozenset[str]] = {
 MAX_FILENAME_LENGTH = 255
 
 
+def accepted_extensions() -> tuple[str, ...]:
+    """Extensions the validator admits, for clients that fail fast on choice.
+
+    Served to the web app rather than mirrored there, so a client can never
+    advertise a type this validator would reject (or hide one it accepts).
+    """
+    return tuple(sorted(_EXTENSION_KINDS))
+
+
 @dataclass(frozen=True)
 class ValidatedUpload:
     """The outcome of full validation: safe name, true kind, canonical MIME."""

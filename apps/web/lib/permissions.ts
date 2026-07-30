@@ -9,11 +9,25 @@
  */
 import type { MembershipRole } from "./contracts";
 
-export type WorkspaceCapability = "manageMembers" | "query" | "uploadDocuments" | "view";
+export type WorkspaceCapability =
+  | "manageDocuments"
+  | "manageMembers"
+  | "query"
+  | "uploadDocuments"
+  | "view";
+
+/** Every capability the API defines, for the parity test to check against. */
+export const ALL_CAPABILITIES: readonly WorkspaceCapability[] = [
+  "view",
+  "query",
+  "uploadDocuments",
+  "manageDocuments",
+  "manageMembers",
+];
 
 const ROLE_CAPABILITIES: Record<MembershipRole, readonly WorkspaceCapability[]> = {
-  owner: ["view", "query", "uploadDocuments", "manageMembers"],
-  admin: ["view", "query", "uploadDocuments", "manageMembers"],
+  owner: ["view", "query", "uploadDocuments", "manageDocuments", "manageMembers"],
+  admin: ["view", "query", "uploadDocuments", "manageDocuments", "manageMembers"],
   member: ["view", "query", "uploadDocuments"],
   viewer: ["view", "query"],
 };

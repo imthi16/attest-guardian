@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import pytest
 from app.db.models.documents import (
@@ -22,6 +23,7 @@ from app.db.models.documents import (
 )
 from app.db.models.enums import DocumentStatus
 from app.db.models.identity import User, Workspace
+from app.db.repositories.chunks import ChunkRepository
 from app.embeddings.types import EmbeddingVector
 from app.retrieval.fusion import FusedCandidate
 from app.retrieval.service import HybridRetrievalService, RetrievalConfig
@@ -373,6 +375,55 @@ async def test_hydration_rechecks_ready_status_after_candidate_selection(
     await db_session.flush()
 
     assert await service._hydrate(workspace.id, fused) == []
+
+
+async def test_archiving_removes_a_document_from_every_retrieval_path(
+    db_session: AsyncSession,
+) -> None:
+    """Archiving must stop evidence at the retrieval boundary, not in the UI.
+
+    The chunk stays READY and fully provenanced, so this pins the archive flag
+    itself: lexical candidates, dense candidates, and hydration must all drop
+    it the moment the document is withdrawn.
+    """
+    owner = await factories.make_user(db_session)
+    workspace = await factories.make_workspace(db_session, owner)
+    embedding = _dense_vector((0, 1.0))
+    chunk = await _seed_chunk(
+        db_session,
+        workspace=workspace,
+        owner=owner,
+        content="the archived contract sets the renewal notice at thirty days",
+        language="eng",
+        embedding=embedding,
+    )
+    service = _service(db_session, embedding)
+    fused = [FusedCandidate(chunk_id=chunk.id, score=1.0, ranks={"lexical": 1})]
+
+    before = await service.search(workspace_id=workspace.id, query="renewal notice")
+    assert chunk.id in _ids(before.chunks)
+
+    version = await db_session.get(DocumentVersion, chunk.document_version_id)
+    assert version is not None
+    document = await db_session.get(Document, version.document_id)
+    assert document is not None
+    document.archived_at = datetime.now(UTC)
+    await db_session.flush()
+
+    after = await service.search(workspace_id=workspace.id, query="renewal notice")
+    assert after.chunks == []
+    assert after.trace.lexical_count == 0
+    assert after.trace.dense_count == 0
+    # Defense in depth: even a candidate selected before the archival is dropped.
+    assert await service._hydrate(workspace.id, fused) == []
+    # Citation resolution refuses the same chunk, so a stored answer cannot
+    # keep quoting a withdrawn document.
+    assert await ChunkRepository(db_session, workspace.id).get_provenance(chunk.id) is None
+
+    document.archived_at = None
+    await db_session.flush()
+    restored = await service.search(workspace_id=workspace.id, query="renewal notice")
+    assert chunk.id in _ids(restored.chunks)
 
 
 def _reranking_service(

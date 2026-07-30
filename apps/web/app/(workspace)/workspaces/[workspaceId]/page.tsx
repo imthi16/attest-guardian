@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AccessNotice } from "../../../../components/access-notice";
@@ -63,11 +64,20 @@ export default async function WorkspaceOverviewPage({ params }: WorkspacePagePro
         </section>
 
         <section aria-labelledby="next-title" className="workspace-next">
-          <h2 id="next-title">Coming next</h2>
+          <h2 id="next-title">Documents</h2>
+          <p className="auth-copy">
+            Add documents and follow their processing state. Only a document that finishes
+            processing can ever be cited as evidence.
+          </p>
+          <p className="hero-actions">
+            <Link className="primary-button" href={`/workspaces/${workspace.data.id}/documents`}>
+              Open the document library
+            </Link>
+          </p>
           <SystemState
-            description="Document management and the evidence chat arrive in the following milestones. Until then, this workspace only manages access."
+            description="The evidence chat arrives in the next milestone. Until then, this workspace manages access and its document library."
             state="empty"
-            title="No documents yet"
+            title="No evidence chat yet"
           />
         </section>
       </main>

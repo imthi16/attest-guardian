@@ -135,6 +135,97 @@ API. `apps/web/lib/permissions.test.ts` reads the Python matrix and fails if the
 stale mirror is a build failure rather than a silent authorization gap. Non-membership continues to
 return `workspace_not_found`, so the UI cannot be used to probe which workspaces exist.
 
+### Document lifecycle exposure
+
+The document library adds four state-changing endpoints, all inside the workspace context so
+membership is proven and row-level security is bound before any tenant row moves:
+
+| Endpoint | Capability | Notes |
+| --- | --- | --- |
+| `POST .../documents/{id}/archive` | `MANAGE_DOCUMENTS` | Reversible; audited as `document.archived` |
+| `POST .../documents/{id}/restore` | `MANAGE_DOCUMENTS` | Audited as `document.restored` |
+| `POST .../documents/{id}/retry` | `UPLOAD_DOCUMENTS` | Refused unless `status == FAILED`; never for a quarantined or permanently failed document |
+| `DELETE .../documents/{id}` | `MANAGE_DOCUMENTS` | Refused unless already archived and not mid-run; purges rows and every stored object; audited as `document.deleted` |
+| `GET .../documents/policy` | `VIEW` | Reports the deployment's effective upload limits |
+
+Security-relevant properties:
+
+- **Quarantine stays terminal.** A quarantined document cannot be reprocessed through the API at
+  all, so a scanner or prompt-injection verdict cannot be undone by a caller with upload rights.
+- **Archival removes evidence, not just rows in a list.** `evidence_eligible()` gates lexical
+  retrieval, dense retrieval, hydration, and citation resolution, so an archived document stops
+  contributing to answers immediately.
+- **Deletion is two-step and audited.** The audit row is written before the document row is deleted
+  and survives it, because audit rows reference resources by id rather than by foreign key.
+- **Deletion purges the document's whole key prefix.** When `INGESTION_STORE_PAGE_IMAGES` is on,
+  ingestion writes a PNG per page — pictures of the document's content — and writes each one to
+  storage *before* the `pages` row that records it is committed. A purge driven by those rows would
+  therefore miss every image from a run that crashed mid-OCR, so the purge sweeps the document's
+  server-generated prefix instead and treats the recorded keys as a fallback. Without that, a
+  "permanent" deletion could leave the document's pages readable in object storage indefinitely.
+- **Deletion is durable before it is complete.** Rows and objects cannot be deleted in one
+  transaction, so the request never calls storage: it commits the row deletion with a
+  `storage_purges` record, and a sweeper deletes the objects afterwards and retries until it
+  succeeds. A crash or a storage outage therefore delays the purge rather than losing the
+  instruction — and never leaves a surviving document whose bytes are already gone. Retention
+  monitoring should alert on purge records that stay pending, since that is what a worker without
+  `BYPASSRLS`, or a persistent storage failure, looks like.
+- **Deletion cannot destabilise a worker.** It is refused while a job is `RUNNING`, because the
+  cascade would remove the row a worker is still writing stages to. That check and the cascade are
+  not atomic, so the worker also treats a vanished job as an abandoned one rather than asserting —
+  losing one document can never stop the ingestion process.
+- **State transitions are serialized, in one lock order.** Retry and delete read the document
+  `FOR UPDATE`. The worker's claim is a compare-and-set on a single job id, so it makes duplicate
+  *delivery* safe but does not deduplicate two distinct jobs; without the row lock, two concurrent
+  retries would each enqueue one and two workers would race over the same pages and chunks. Every
+  path that writes both a document and its job takes the *document* lock first — the worker included
+  — because the reverse order would deadlock against a delete, and PostgreSQL would abort one of the
+  two: the worker at a point where it can record nothing, or the request as a 500. Holding the
+  document lock is also what makes delete's "is a job running?" check meaningful, since no claim can
+  start behind it.
+- **Deterministic failures are not retryable.** A hash mismatch, an unparseable file, or a
+  provenance violation is recorded as `permanent_failure`, so a caller cannot queue unbounded runs
+  that are certain to fail identically on the same bytes.
+- **`retryable` is scoped to the caller, and is the only source of the control.** One predicate
+  (`may_retry`) answers whether *this* caller may retry — state, permanence, and their own role — and
+  it is reported on the document itself as well as on the status endpoint. The UI renders "Process
+  again" from that field rather than from `status == "failed"`, so a permanently failed document
+  never presents an action that can only return 409.
+- **Non-members still learn nothing.** Every lifecycle route answers `workspace_not_found` for a
+  non-member and `document_not_found` for another tenant's document id.
+
+### Upload and download relays
+
+`POST /api/workspaces/[id]/documents` and `GET /api/workspaces/[id]/documents/[docId]/download` are
+Next.js route handlers that exchange the `httpOnly` session cookie for a bearer token server side.
+They are relays and never soften an API decision; regression tests pin that a 403 or 401 from the API
+is passed through unchanged. The upload relay forwards only the `file` part, so no client-supplied
+title or metadata becomes tenant content.
+
+The upload relay carries two protections a server action would have provided for free:
+
+- **Origin is verified.** `SameSite=Lax` scopes the session cookie to the *site*, not the origin, so
+  in a deployment with an attacker-controlled sibling origin under the same registrable domain, a
+  script there could otherwise send a credentialed cross-origin upload and spend the victim's
+  workspace quota. The handler compares `Origin` against `X-Forwarded-Host`/`Host` and refuses a
+  request that does not match or omits `Origin` entirely. Next.js applies the equivalent check to
+  server actions itself; a route handler has to make it explicitly.
+- **The body is bounded before it is parsed.** `request.formData()` materializes the whole request in
+  memory, so checking the file's size afterwards is too late to stop concurrent oversized requests
+  from exhausting the process. `Content-Length` is checked first, and a request that declares no
+  length is refused with `411`.
+
+Both the relay and the browser take the size cap from `GET .../documents/policy` rather than a
+compiled-in constant, so raising or lowering `MAX_UPLOAD_BYTES` in a deployment cannot leave the web
+tier rejecting files the API accepts or advertising ones it will refuse. The two handle an
+*unavailable* policy differently, on purpose: the relay must bound the body it buffers, so it refuses
+the upload outright, while the browser treats an unknown cap as unknown and skips its local size
+check rather than enforcing the compiled-in default — which on a deployment that raised the cap would
+refuse a perfectly valid file because one request happened to fail.
+
+Presigned download URLs are minted per click, carry `Cache-Control: no-store`, and are never
+rendered into HTML, so they cannot be scraped from a page or survive in a cache.
+
 ### Error disclosure
 
 Failures reach the UI as the API's stable `{code, message}` envelope. Transport and schema failures
@@ -161,3 +252,10 @@ which is covered by a regression test.
   alarmed on.
 - **Superuser bypass of row-level security.** RLS policies only bite for non-superuser database
   roles; deployments must connect the app as a non-superuser role.
+- **Buffered upload relay.** The web upload route reads the whole multipart body into memory
+  before forwarding it, bounded by `MAX_UPLOAD_BYTES` (25 MiB) per request. Concurrent uploads
+  therefore consume memory in the Next.js process; streaming the body through is the fix if that
+  becomes a scaling limit.
+- **Deleted bytes are not shredded.** Permanent deletion removes the object from the bucket, but
+  storage-level retention, versioning, or backups may still hold a copy. A documented retention
+  and shredding workflow is Phase 6 work.

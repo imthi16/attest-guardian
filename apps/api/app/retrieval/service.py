@@ -22,8 +22,7 @@ from dataclasses import dataclass, replace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.documents import Chunk, Document, DocumentVersion
-from app.db.models.enums import DocumentStatus
+from app.db.models.documents import Chunk, Document, DocumentVersion, evidence_eligible
 from app.db.repositories.chunks import ChunkRepository, LexicalMatch
 from app.db.repositories.embeddings import ChunkEmbeddingRepository, VectorMatch
 from app.embeddings.service import EmbeddingService
@@ -215,9 +214,10 @@ class HybridRetrievalService:
     ) -> list[RetrievedChunk]:
         """Load full chunk provenance for fused ids, preserving fused order.
 
-        The load is workspace-scoped and rechecks the owning document's READY
-        status as defense in depth. This closes the race where a candidate is
-        selected while READY but becomes quarantined before hydration.
+        The load is workspace-scoped and rechecks the owning document's
+        evidence eligibility as defense in depth. This closes the race where a
+        candidate is selected while eligible but is quarantined or archived
+        before hydration.
         """
         if not fused:
             return []
@@ -230,7 +230,7 @@ class HybridRetrievalService:
             .where(
                 Chunk.workspace_id == workspace_id,
                 Document.workspace_id == workspace_id,
-                Document.status == DocumentStatus.READY,
+                evidence_eligible(),
                 Chunk.id.in_(chunk_ids),
             )
         )

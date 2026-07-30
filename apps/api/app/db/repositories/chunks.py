@@ -18,8 +18,7 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.citations.types import ChunkProvenance
-from app.db.models.documents import Chunk, Document, DocumentVersion
-from app.db.models.enums import DocumentStatus
+from app.db.models.documents import Chunk, Document, DocumentVersion, evidence_eligible
 from app.db.repositories.base import WorkspaceScopedRepository
 
 # Matches the configuration of ix_chunks_content_fts (migration 0008).
@@ -78,14 +77,15 @@ class ChunkRepository(WorkspaceScopedRepository[Chunk]):
             query = query.op("||")(to_tsquery(term))
 
         rank = func.ts_rank_cd(document, query).label("score")
-        # Only READY documents are candidates: a quarantined or failed document
-        # must never contribute evidence, so its chunks are excluded here (the
-        # retrieval boundary), not merely hidden in the UI. This is the same
-        # gate `get_provenance` enforces, applied at candidate generation.
+        # Only evidence-eligible documents are candidates: a quarantined,
+        # failed, or archived document must never contribute evidence, so its
+        # chunks are excluded here (the retrieval boundary), not merely hidden
+        # in the UI. This is the same gate `get_provenance` enforces, applied
+        # at candidate generation.
         ready_versions = (
             select(DocumentVersion.id)
             .join(Document, DocumentVersion.document_id == Document.id)
-            .where(Document.status == DocumentStatus.READY)
+            .where(evidence_eligible())
         )
         statement = (
             select(Chunk.id, rank)
@@ -116,10 +116,11 @@ class ChunkRepository(WorkspaceScopedRepository[Chunk]):
         and version number a citation needs. The workspace filter is applied on
         the chunk (and row-level security fences it again), so a chunk owned by
         another tenant resolves to ``None`` and is indistinguishable from one
-        that does not exist. Only chunks of a ``READY`` document are returned:
-        ingestion commits chunks stage by stage, so a later quarantine or
-        failure can leave chunk rows behind on a document that must never be
-        cited — requiring readiness here keeps that text out of resolution.
+        that does not exist. Only chunks of an evidence-eligible document are
+        returned: ingestion commits chunks stage by stage, so a later
+        quarantine, failure, or archival can leave chunk rows behind on a
+        document that must never be cited — requiring eligibility here keeps
+        that text out of resolution.
         """
         statement = (
             select(
@@ -133,7 +134,7 @@ class ChunkRepository(WorkspaceScopedRepository[Chunk]):
             .where(
                 Chunk.id == chunk_id,
                 Chunk.workspace_id == self.workspace_id,
-                Document.status == DocumentStatus.READY,
+                evidence_eligible(),
             )
         )
         row = (await self._session.execute(statement)).first()

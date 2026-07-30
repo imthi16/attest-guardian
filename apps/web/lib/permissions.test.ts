@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { allows, ALL_ROLES, canManageRole, grantableRoles, ROLE_LABELS } from "./permissions";
+import {
+  allows,
+  ALL_CAPABILITIES,
+  ALL_ROLES,
+  canManageRole,
+  grantableRoles,
+  ROLE_LABELS,
+} from "./permissions";
 import { membershipRoleSchema } from "./contracts";
 
 /**
@@ -31,6 +38,17 @@ describe("workspace role mirror", () => {
     expect(Object.keys(ROLE_LABELS).sort()).toEqual(apiRoles.sort());
   });
 
+  it("mirrors every capability the API defines", () => {
+    // A capability the API gained but the mirror lacks would silently hide a
+    // control forever, so the action enum itself is compared, not just the
+    // matrix. `UPLOAD_DOCUMENTS` in Python is `uploadDocuments` here.
+    const apiActions = [...permissionsSource.matchAll(/^ {4}([A-Z_]+) = "(\w+)"$/gm)].map((match) =>
+      match[2].replace(/_(\w)/g, (_, letter: string) => letter.toUpperCase()),
+    );
+
+    expect(apiActions.sort()).toEqual([...ALL_CAPABILITIES].sort());
+  });
+
   it("matches the API capability matrix", () => {
     // Owners and admins hold every action; members lose member management;
     // viewers additionally lose uploads. Asserted against the source so a
@@ -54,6 +72,13 @@ describe("workspace role mirror", () => {
     expect(allows("admin", "manageMembers")).toBe(true);
     expect(allows("member", "manageMembers")).toBe(false);
     expect(allows("viewer", "manageMembers")).toBe(false);
+
+    // Withdrawing or destroying evidence is owner/admin work, so a member who
+    // may upload still may not archive, restore, or delete.
+    expect(allows("owner", "manageDocuments")).toBe(true);
+    expect(allows("admin", "manageDocuments")).toBe(true);
+    expect(allows("member", "manageDocuments")).toBe(false);
+    expect(allows("viewer", "manageDocuments")).toBe(false);
   });
 
   it("matches the API role-management matrix", () => {

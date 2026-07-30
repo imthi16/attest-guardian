@@ -7,7 +7,7 @@ WEB_DIR := apps/web
 API_VENV := $(API_DIR)/.venv
 API_BIN := $(API_VENV)/bin
 
-.PHONY: help install install-api install-web hooks dev-api dev-web format format-check lint typecheck test build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
+.PHONY: help install install-api install-web hooks dev-api dev-web demo-api format format-check lint typecheck test build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
 
 help: ## Show available development commands.
 	@awk 'BEGIN {FS = ":.*## "; printf "Attest Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -91,3 +91,6 @@ migrate-new: ## Autogenerate a migration; usage: make migrate-new m="describe ch
 
 clean: ## Remove generated local build and coverage output.
 	rm -rf $(API_DIR)/.coverage $(API_DIR)/htmlcov $(WEB_DIR)/.next $(WEB_DIR)/coverage
+
+demo-api: ## Run an in-memory API stand-in so the UI can be viewed without Docker.
+	$(PYTHON) scripts/demo-api.py

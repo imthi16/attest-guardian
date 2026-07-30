@@ -9,15 +9,24 @@ import { z } from "zod";
 
 import { apiRequest, type ApiResult } from "./api-client";
 import {
+  documentListSchema,
+  documentProgressSchema,
+  documentSchema,
+  downloadLinkSchema,
   memberListSchema,
   memberSchema,
   tokenPairSchema,
+  uploadPolicySchema,
   userSchema,
   workspaceListSchema,
   workspaceWithRoleSchema,
+  type Document,
+  type DocumentProgress,
+  type DownloadLink,
   type Member,
   type MembershipRole,
   type TokenPair,
+  type UploadPolicy,
   type User,
   type WorkspaceWithRole,
 } from "./contracts";
@@ -25,6 +34,12 @@ import { authorizedRequest, type AuthorizedResult } from "./session";
 
 /** 204 responses carry no body; `null` is the only valid payload. */
 const noContentSchema = z.null();
+
+/** Path prefix for one workspace's documents, with both ids escaped. */
+function documentsPath(workspaceId: string, documentId?: string): string {
+  const base = `/workspaces/${encodeURIComponent(workspaceId)}/documents`;
+  return documentId === undefined ? base : `${base}/${encodeURIComponent(documentId)}`;
+}
 
 export function registerAccount(input: {
   email: string;
@@ -129,6 +144,127 @@ export function removeMember(input: {
     path: `/workspaces/${encodeURIComponent(input.workspaceId)}/members/${encodeURIComponent(
       input.userId,
     )}`,
+    schema: noContentSchema,
+  });
+}
+
+/**
+ * The upload limits this deployment enforces.
+ *
+ * Read from the API so the browser and the upload relay fail fast against the
+ * deployed configuration rather than a compiled-in copy of the defaults.
+ */
+export function fetchUploadPolicy(workspaceId: string): Promise<AuthorizedResult<UploadPolicy>> {
+  return authorizedRequest({
+    path: `${documentsPath(workspaceId)}/policy`,
+    schema: uploadPolicySchema,
+  });
+}
+
+/**
+ * List a workspace's documents. Archived documents are withdrawn from evidence
+ * and hidden unless explicitly asked for, matching the API's default.
+ */
+export function fetchDocuments(
+  workspaceId: string,
+  options: { includeArchived?: boolean } = {},
+): Promise<AuthorizedResult<Document[]>> {
+  const query = options.includeArchived === true ? "?include_archived=true" : "";
+  return authorizedRequest({
+    path: `${documentsPath(workspaceId)}${query}`,
+    schema: documentListSchema,
+  });
+}
+
+export function fetchDocument(
+  workspaceId: string,
+  documentId: string,
+): Promise<AuthorizedResult<Document>> {
+  return authorizedRequest({
+    path: documentsPath(workspaceId, documentId),
+    schema: documentSchema,
+  });
+}
+
+export function fetchDocumentProgress(
+  workspaceId: string,
+  documentId: string,
+): Promise<AuthorizedResult<DocumentProgress>> {
+  return authorizedRequest({
+    path: `${documentsPath(workspaceId, documentId)}/status`,
+    schema: documentProgressSchema,
+  });
+}
+
+/**
+ * Mint a short-lived presigned download URL.
+ *
+ * The link is requested at the moment of the click rather than embedded in a
+ * rendered page, so a URL never outlives the page that would have shown it.
+ */
+export function requestDownloadLink(
+  workspaceId: string,
+  documentId: string,
+): Promise<AuthorizedResult<DownloadLink>> {
+  return authorizedRequest({
+    path: `${documentsPath(workspaceId, documentId)}/download`,
+    schema: downloadLinkSchema,
+  });
+}
+
+/** Forward an already-validated multipart upload to the API. */
+export function uploadDocument(
+  workspaceId: string,
+  file: FormData,
+): Promise<AuthorizedResult<Document>> {
+  return authorizedRequest({
+    body: file,
+    method: "POST",
+    path: documentsPath(workspaceId),
+    schema: documentSchema,
+  });
+}
+
+export function archiveDocument(
+  workspaceId: string,
+  documentId: string,
+): Promise<AuthorizedResult<Document>> {
+  return authorizedRequest({
+    method: "POST",
+    path: `${documentsPath(workspaceId, documentId)}/archive`,
+    schema: documentSchema,
+  });
+}
+
+export function restoreDocument(
+  workspaceId: string,
+  documentId: string,
+): Promise<AuthorizedResult<Document>> {
+  return authorizedRequest({
+    method: "POST",
+    path: `${documentsPath(workspaceId, documentId)}/restore`,
+    schema: documentSchema,
+  });
+}
+
+export function retryDocumentIngestion(
+  workspaceId: string,
+  documentId: string,
+): Promise<AuthorizedResult<DocumentProgress>> {
+  return authorizedRequest({
+    method: "POST",
+    path: `${documentsPath(workspaceId, documentId)}/retry`,
+    schema: documentProgressSchema,
+  });
+}
+
+export function deleteDocument(
+  workspaceId: string,
+  documentId: string,
+): Promise<AuthorizedResult<null>> {
+  return authorizedRequest({
+    method: "DELETE",
+    path: documentsPath(workspaceId, documentId),
     schema: noContentSchema,
   });
 }

@@ -156,6 +156,51 @@ def document_not_found() -> HTTPException:
     )
 
 
+def document_archived() -> HTTPException:
+    """An archived document is withdrawn from evidence and cannot be processed."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "document_archived",
+        "This document is archived. Restore it before processing it again.",
+    )
+
+
+def document_not_retryable() -> HTTPException:
+    """Quarantined and in-flight documents are never reprocessed on request."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "document_not_retryable",
+        "Only a failed document can be processed again.",
+    )
+
+
+def document_permanently_failed() -> HTTPException:
+    """A deterministic failure cannot succeed on another run of the same bytes."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "document_permanently_failed",
+        "This document failed in a way that will not change on another attempt. "
+        "Upload a corrected file instead.",
+    )
+
+
+def document_processing() -> HTTPException:
+    """Deleting mid-run would pull the job row out from under a worker."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "document_processing",
+        "This document is being processed. Wait for it to finish before deleting it.",
+    )
+
+
+def document_delete_requires_archive() -> HTTPException:
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "document_delete_requires_archive",
+        "Archive this document before deleting it permanently.",
+    )
+
+
 def workspace_quota_exceeded(code: str, message: str) -> HTTPException:
     """A per-workspace document-count or storage-byte quota was reached."""
     return _error(status.HTTP_413_CONTENT_TOO_LARGE, code, message)

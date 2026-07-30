@@ -265,3 +265,112 @@ Loading (`loading.tsx` with `aria-live="polite"`), empty, error, and refusal sta
 components rather than a shared blank fallback, matching the product rule that an uncertain outcome
 must look uncertain. `AccessNotice` renders `insufficient_role`, `cannot_manage_role`,
 `workspace_not_found`, and `rate_limited` with guidance and the stable code.
+
+## Document management UI
+
+The document library is the first place a reviewer sees the ingestion pipeline's own state, so the
+guiding rule is that a document which cannot be cited must never look like one that can. Every
+`DocumentStatus` has explicit wording in `components/ingestion-state.tsx`, and the badge shown in the
+list is the same source of truth as the explanation on the detail page.
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending: upload accepted
+  pending --> processing: worker claims the job
+  processing --> ready: all stages committed
+  processing --> failed: transient errors exhausted
+  processing --> quarantined: scanner or injection verdict
+  failed --> pending: retry (POST /retry)
+  ready --> archived: archive (POST /archive)
+  archived --> ready: restore (POST /restore)
+  archived --> [*]: delete (DELETE, bytes purged asynchronously)
+  quarantined --> [*]: delete (never retried)
+```
+
+### Archival is an evidence boundary, not a UI filter
+
+`documents.archived_at` is a nullable timestamp kept separate from `status`, because status records
+the ingestion outcome and must not be rewritten — an archived document stays `READY` with its
+provenance intact, so restoring it needs no reprocessing. Eligibility for evidence is one predicate,
+`evidence_eligible()` in `apps/api/app/db/models/documents.py`, used by all four retrieval gates:
+lexical candidate generation, dense candidate generation, hydration, and citation provenance
+resolution. Archiving therefore stops answers immediately rather than merely hiding rows in a list;
+`tests/integration/test_retrieval.py` pins that end to end, including the race where a candidate was
+selected before the archival.
+
+Quota accounting deliberately still counts archived documents: their bytes remain stored until the
+document is deleted, so letting archival free quota would let a workspace exceed its limit.
+
+### Permissions
+
+| Action | Capability | Roles |
+| --- | --- | --- |
+| List, view, download | `VIEW` | all members |
+| Upload, retry a failed ingestion | `UPLOAD_DOCUMENTS` | owner, admin, member |
+| Archive, restore, delete | `MANAGE_DOCUMENTS` | owner, admin |
+
+Retrying only reprocesses bytes the workspace already accepted, so it follows the upload capability.
+Archiving, restoring, and deleting withdraw or destroy evidence, so they are reserved for owners and
+admins. `MANAGE_DOCUMENTS` is a new `WorkspaceAction`; `apps/web/lib/permissions.test.ts` now
+enumerates the Python action enum, so a capability added to the API without a mirror fails the build.
+
+### Reprocessing and deletion rules
+
+- **Retry** requires `status == FAILED` and an unarchived document. A quarantined document is never
+  reprocessed on request — the verdict is terminal, and retrying would hand rejected content back to
+  the pipeline. A pending, processing, or ready document has nothing to retry and a second run would
+  race the first over the same rows. The failed job row is kept and a new `QUEUED` job is inserted,
+  so failure history survives and the worker's compare-and-set claim still sees a clean row.
+- **Retry refuses a permanent failure.** The worker records both exhausted-transient and
+  deterministic failures as `FAILED`, so `ingestion_jobs.permanent_failure` distinguishes them. A
+  hash mismatch, an unparseable file, or a provenance violation fails identically on every future
+  run over the same bytes; admitting those would let a caller queue unbounded doomed work.
+- **Retry and delete lock the document row.** Both read it `FOR UPDATE` before branching on its
+  state. The worker's claim is a compare-and-set on one job id — that makes duplicate delivery of a
+  single job safe, but does not deduplicate two distinct jobs, so two concurrent retries would
+  otherwise each enqueue one and two workers would race over the same pages and chunks.
+- **Delete** requires the document to be archived first. That state is reversible and has already
+  removed the document from evidence, so nothing is destroyed on the strength of one click.
+- **Delete is refused while a job is `RUNNING`.** The cascade would remove the row a worker is still
+  writing stages to. A merely `QUEUED` job is not blocking: the worker's claim already drops a
+  message whose row has gone, and refusing there would make a document undeletable whenever its
+  queue is backed up. Because the check and the cascade are not atomic, the worker also treats a
+  vanished job as abandoned rather than asserting on it.
+- **Delete purges by prefix, not by row.** Every object a document produces lives under one
+  server-generated prefix (`apps/api/app/documents/keys.py`): each version's uploaded bytes and,
+  with `INGESTION_STORE_PAGE_IMAGES` on, a rendered PNG per page. Purging the prefix rather than
+  replaying the rows matters because a page image is written to storage *before* its `pages` row is
+  committed — a run that crashed mid-OCR leaves content the database never recorded, and a
+  row-driven purge would leave pictures of the document's pages readable forever. The keys the rows
+  did know are recorded too, so the uploaded bytes are still removed if a listing call fails.
+- **Delete performs no storage call.** Rows and objects cannot be deleted in one transaction, and
+  either ordering strands something on failure: a document that still issues download links for
+  bytes that are gone, or bytes that outlive their document. So the request commits the row deletion
+  together with a durable `storage_purges` record (migration `0011`) and stops there. The sweeper in
+  `apps/api/app/documents/purge.py` — run by the ingestion worker whenever it is idle — deletes the
+  objects and marks the record complete, retrying until it succeeds. The purge is idempotent by
+  construction, since deleting an absent key is a no-op, so an interrupted record is always safe to
+  re-run. Like `requeue_stale`, the sweeper scans across workspaces and therefore needs the
+  worker's `BYPASSRLS` role; without it purge records stay pending and bytes are retained.
+
+### Upload and download paths
+
+Two Next.js route handlers exist because a server action is the wrong shape for both:
+
+| Path | Why not a server action |
+| --- | --- |
+| `POST /api/workspaces/[id]/documents` | Only `XMLHttpRequest` reports how much of a request body has been sent, and byte-level progress is the point for a 20 MB scan |
+| `GET /api/workspaces/[id]/documents/[docId]/download` | The presigned URL must be reached by a link navigation; `form-action 'self'` in the CSP would refuse a form redirect to the storage origin, and a link also works without client JavaScript |
+
+Both are relays, not authorization points: they exchange the `httpOnly` session cookie for a bearer
+token server side and let the API decide. The upload relay forwards only the file part, so no
+client-chosen metadata reaches tenant storage, and the presigned URL is minted at click time and
+never rendered into HTML.
+
+### Untrusted content
+
+Filenames, titles, and worker error strings all originate in uploaded files. They are rendered as
+text children only — the app contains no `dangerouslySetInnerHTML` — and no page previews document
+contents: the file's text reaches a reader solely as cited evidence. Regression tests assert that a
+filename or ingestion error containing markup produces no element, and that the detail page renders
+no `iframe`, `object`, `embed`, or `img`.

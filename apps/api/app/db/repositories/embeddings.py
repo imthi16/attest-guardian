@@ -15,8 +15,13 @@ from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 
-from app.db.models.documents import Chunk, ChunkEmbedding, Document, DocumentVersion
-from app.db.models.enums import DocumentStatus
+from app.db.models.documents import (
+    Chunk,
+    ChunkEmbedding,
+    Document,
+    DocumentVersion,
+    evidence_eligible,
+)
 from app.db.repositories.base import WorkspaceScopedRepository
 from app.embeddings.types import EmbeddingVector
 
@@ -115,14 +120,14 @@ class ChunkEmbeddingRepository(WorkspaceScopedRepository[ChunkEmbedding]):
             ChunkEmbedding.model == query.model,
             ChunkEmbedding.model_version == query.model_version,
         ]
-        # Only READY documents are retrievable: a quarantined or failed document
-        # must never contribute evidence. This mirrors the lexical retriever's
-        # gate so both sides of the fusion draw from the same authorized,
-        # non-quarantined candidate set.
+        # Only evidence-eligible documents are retrievable: a quarantined,
+        # failed, or archived document must never contribute evidence. This
+        # mirrors the lexical retriever's gate so both sides of the fusion draw
+        # from the same authorized candidate set.
         ready_versions = (
             select(DocumentVersion.id)
             .join(Document, DocumentVersion.document_id == Document.id)
-            .where(Document.status == DocumentStatus.READY)
+            .where(evidence_eligible())
         )
         ready_chunks = select(Chunk.id).where(
             Chunk.id == ChunkEmbedding.chunk_id,

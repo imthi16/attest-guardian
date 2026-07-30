@@ -11,7 +11,7 @@ from app.db.models.enums import (
     MessageRole,
 )
 from app.db.models.identity import Membership, RefreshToken, User, Workspace
-from app.db.models.operations import AuditLog, IngestionJob
+from app.db.models.operations import AuditLog, IngestionJob, StoragePurge
 
 __all__ = [
     "AnswerStatus",
@@ -32,6 +32,7 @@ __all__ = [
     "MessageRole",
     "Page",
     "RefreshToken",
+    "StoragePurge",
     "User",
     "VerificationResult",
     "Workspace",

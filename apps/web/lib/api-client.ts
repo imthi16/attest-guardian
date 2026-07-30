@@ -65,8 +65,10 @@ export type ApiRequest<T> = Readonly<{
  * Perform one backend call and validate the result.
  *
  * `schema` describes the success payload; pass a void-like schema for 204
- * responses. Network and parse failures are reported as client-side codes so
- * they are never mistaken for backend decisions.
+ * responses. A `FormData` body is forwarded as multipart with its boundary
+ * chosen by fetch, which is how document uploads reach the API. Network and
+ * parse failures are reported as client-side codes so they are never mistaken
+ * for backend decisions.
  */
 export async function apiRequest<T>({
   accessToken,
@@ -79,14 +81,15 @@ export async function apiRequest<T>({
   if (accessToken !== undefined) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  if (body !== undefined) {
+  const isMultipart = body instanceof FormData;
+  if (body !== undefined && !isMultipart) {
     headers["Content-Type"] = "application/json";
   }
 
   let response: Response;
   try {
     response = await fetch(`${apiOrigin()}/api/v1${path}`, {
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: isMultipart ? body : body === undefined ? undefined : JSON.stringify(body),
       cache: "no-store",
       headers,
       method,
