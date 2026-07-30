@@ -88,7 +88,8 @@ infra-logs: ## Follow local infrastructure logs.
 
 compose-config: ## Validate the resolved Docker Compose configuration.
 	docker compose config --quiet
-	@DATABASE_URL=x REDIS_URL=x JWT_SECRET=x S3_ENDPOINT=x S3_ACCESS_KEY=x \
+	@API_DATABASE_URL=x WORKER_DATABASE_URL=x MIGRATE_DATABASE_URL=x IMAGE_TAG=validate \
+	 REDIS_URL=x JWT_SECRET=x S3_ENDPOINT=x S3_ACCESS_KEY=x \
 	 S3_SECRET_KEY=x S3_BUCKET=x CORS_ALLOWED_ORIGINS=x \
 	 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml \
 	   --profile application config --quiet

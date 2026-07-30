@@ -106,6 +106,55 @@ def test_the_application_environment_is_defined_once() -> None:
     assert raw.count("*app-environment") >= 3
 
 
+def test_the_three_database_roles_are_distinct() -> None:
+    """One DSN for all three services cannot be correct for any of them.
+
+    The worker's stale-job recovery and purge sweeps run *across* workspaces and
+    need `BYPASSRLS`. Granting that to a shared role silently removes the API's
+    tenant fence — row-level security stops applying to every tenant query.
+    Withholding it leaves crashed jobs stuck and deleted bytes retained. And
+    migrations need DDL rights that neither runtime role should hold, so a
+    compromised API replica cannot drop a table.
+    """
+    services = PRODUCTION["services"]
+    dsns = {
+        name: services[name]["environment"]["DATABASE_URL"] for name in ("api", "worker", "migrate")
+    }
+
+    assert len(set(dsns.values())) == 3, dsns
+    assert "API_DATABASE_URL" in dsns["api"]
+    assert "WORKER_DATABASE_URL" in dsns["worker"]
+    assert "MIGRATE_DATABASE_URL" in dsns["migrate"]
+
+
+def test_production_does_not_select_an_ocr_engine_the_image_lacks() -> None:
+    """Choosing `tesseract` here fails every scanned page rather than reading it.
+
+    The API image installs no tesseract binary and no trained data, so the
+    engine raises on the first page that needs it and the ingestion job fails —
+    turning a document that would have been searchable into one that is broken.
+    """
+    dockerfile = (repo_root() / "apps" / "api" / "Dockerfile").read_text(encoding="utf-8")
+    worker_env = PRODUCTION["services"]["worker"]["environment"]
+
+    if "tesseract" not in dockerfile:
+        assert "none" in worker_env["OCR_ENGINE"], (
+            "the image ships no tesseract, so it must not be the production default"
+        )
+
+
+def test_every_application_image_is_tagged_by_release() -> None:
+    """The documented rollback sets `IMAGE_TAG`; something has to consume it.
+
+    Without an `image:` reference the rollback command rebuilds the *current*
+    source and starts it again — during an incident, while the operator believes
+    they have gone back a release.
+    """
+    for name in ("api", "worker", "migrate", "web"):
+        image = PRODUCTION["services"][name]["image"]
+        assert "${IMAGE_TAG" in image, name
+
+
 def test_production_refuses_to_start_without_real_secrets() -> None:
     """The base file's development defaults are the hazard being removed.
 
@@ -197,6 +246,57 @@ async def test_an_unreachable_dependency_is_a_result_not_an_exception(
 
     assert isinstance(result, CheckResult)
     assert result.ok is False
+
+
+def test_the_backup_scripts_use_the_configured_stores() -> None:
+    """Not `compose exec postgres`, which the production topology parks.
+
+    The first version of these scripts did exactly that: in production it
+    reaches a container that is not running, and if somebody started it, it
+    would faithfully back up an empty local database and report success. A
+    backup that cannot fail loudly is worse than no backup.
+    """
+    backup = (repo_root() / "scripts" / "backup.sh").read_text(encoding="utf-8")
+    restore = (repo_root() / "scripts" / "restore.sh").read_text(encoding="utf-8")
+
+    for script, name in ((backup, "backup.sh"), (restore, "restore.sh")):
+        # Comments explain why it is not done; the code must not do it.
+        executable = [
+            line
+            for line in script.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert not any("compose exec" in line for line in executable), name
+        assert "DATABASE_URL" in script, name
+        assert "S3_ENDPOINT" in script, name
+
+
+def test_the_manifest_covers_the_objects_as_well_as_the_dump() -> None:
+    """Otherwise the runbook's promise to refuse a mismatched pair is false.
+
+    Swapping the objects directory for another date's would pass every check,
+    and restored citations would resolve to unrelated evidence with nothing able
+    to detect it.
+    """
+    backup = (repo_root() / "scripts" / "backup.sh").read_text(encoding="utf-8")
+    restore = (repo_root() / "scripts" / "restore.sh").read_text(encoding="utf-8")
+
+    assert "objects_sha256" in backup
+    assert "objects_sha256" in restore
+
+
+def test_restore_validates_before_it_destroys() -> None:
+    """The ordering is the whole point of the script.
+
+    An earlier version ran `pg_restore --clean` and only then warned that the
+    objects directory was missing — by which time the database had been replaced
+    and every restored row pointed at bytes that were not there.
+    """
+    restore = (repo_root() / "scripts" / "restore.sh").read_text(encoding="utf-8")
+
+    first_destructive = restore.index("pg_restore --dbname")
+    for guard in ("refusing to restore a database whose documents", "does not match its manifest"):
+        assert restore.index(guard) < first_destructive, guard
 
 
 def test_the_operational_scripts_are_executable_and_documented() -> None:

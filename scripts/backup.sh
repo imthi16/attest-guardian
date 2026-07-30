@@ -1,60 +1,86 @@
 #!/usr/bin/env bash
 # Back up everything that cannot be rebuilt: the database and the stored objects.
 #
-# Two stores, and they are not independent. A `documents` row points at a
-# storage key; a chunk's citation is only resolvable while both exist. Backing
-# up one without the other produces a restore where answers cite evidence that
-# is gone — worse than no backup, because it looks like it worked.
+# Connects to the deployment's *configured* stores, read from the same
+# environment the application uses. An earlier version of this script ran
+# `docker compose exec postgres pg_dump`, which in the documented production
+# topology reaches a service that is not running — and if somebody started it,
+# would faithfully back up an empty local database while reporting success. A
+# backup script that cannot fail loudly is worse than none.
 #
-# So both are captured in one run, under one timestamp, and the restore script
-# refuses a pair that does not match. There is still a window: this is not a
-# consistent snapshot across two systems, and a document uploaded between the
-# two steps will be in storage and not in the dump. That direction is the safe
-# one — an orphaned object wastes space, an orphaned row breaks an answer — and
-# it is why the database is dumped *first*.
+# The two stores are not independent. A `documents` row points at a storage key,
+# and a citation is only resolvable while both exist, so both are captured under
+# one timestamp and both are digested into the manifest. `restore.sh` refuses a
+# pair whose digests do not match: a database from Tuesday beside objects from
+# Thursday makes citations resolve to the wrong text, which nothing downstream
+# can detect.
+#
+# Requires `pg_dump` (matching the server's major version), `mc`, and
+# `sha256sum` on PATH.
 set -euo pipefail
+
+: "${DATABASE_URL:?set DATABASE_URL to the DSN this deployment uses}"
+: "${S3_ENDPOINT:?set S3_ENDPOINT}"
+: "${S3_ACCESS_KEY:?set S3_ACCESS_KEY}"
+: "${S3_SECRET_KEY:?set S3_SECRET_KEY}"
+: "${S3_BUCKET:?set S3_BUCKET}"
 
 BACKUP_ROOT="${BACKUP_ROOT:-./backups}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DEST="${BACKUP_ROOT}/${STAMP}"
 
-POSTGRES_USER="${POSTGRES_USER:-attest}"
-POSTGRES_DB="${POSTGRES_DB:-attest}"
-S3_BUCKET="${S3_BUCKET:-attest-documents}"
-COMPOSE="${COMPOSE:-docker compose}"
+# SQLAlchemy's driver suffix is not understood by libpq.
+PG_DSN="${DATABASE_URL/postgresql+asyncpg:/postgresql:}"
 
-mkdir -p "${DEST}"
+for tool in pg_dump mc sha256sum; do
+  command -v "${tool}" >/dev/null || { echo "${tool} is required but not on PATH" >&2; exit 1; }
+done
+
+mkdir -p "${DEST}/objects"
 echo "backing up to ${DEST}"
 
-# Database first: see the note above about which orphan is survivable.
-# `--format=custom` so `pg_restore` can run in parallel and be selective.
-${COMPOSE} exec -T postgres pg_dump \
-  --username="${POSTGRES_USER}" \
-  --dbname="${POSTGRES_DB}" \
-  --format=custom \
-  --no-owner \
-  --no-privileges \
+cat >&2 <<'WARNING'
+NOTE: this is not an atomic snapshot across two systems. A permanent delete
+between the two steps can purge an object whose row is already in the dump,
+leaving a restored citation pointing at bytes that are gone. Stop the worker —
+or pause purging — for the duration if that matters to you.
+WARNING
+
+# Database first. A document uploaded between the steps then lands in storage
+# and not in the dump: an orphaned object wastes space, an orphaned row breaks
+# an answer, and only one of those is survivable.
+pg_dump --dbname="${PG_DSN}" --format=custom --no-owner --no-privileges \
   > "${DEST}/database.dump"
 echo "  database.dump  $(du -h "${DEST}/database.dump" | cut -f1)"
 
-# Objects. `mc mirror` rather than a tarball so a restore can be incremental and
-# a large corpus does not need twice its size in scratch space.
-${COMPOSE} run --rm --no-deps \
-  --entrypoint sh minio-create-bucket -c "
-    mc alias set backup \"\${MINIO_ENDPOINT}\" \"\${MINIO_ROOT_USER}\" \"\${MINIO_ROOT_PASSWORD}\" >/dev/null &&
-    mc mirror --quiet --overwrite \"backup/${S3_BUCKET}\" /backup/objects
-  " || { echo "object backup failed; the database dump alone is NOT a usable backup" >&2; exit 1; }
+mc alias set attest-backup "${S3_ENDPOINT}" "${S3_ACCESS_KEY}" "${S3_SECRET_KEY}" >/dev/null
+mc mirror --quiet --overwrite "attest-backup/${S3_BUCKET}" "${DEST}/objects"
+OBJECT_COUNT="$(find "${DEST}/objects" -type f | wc -l | tr -d ' ')"
+echo "  objects        ${OBJECT_COUNT} file(s)"
 
-# The manifest is what makes the pair verifiable. A restore that silently mixed
-# a database from Tuesday with objects from Thursday would produce citations
-# resolving to the wrong text, which no error would ever report.
+# A digest over the object *tree*, not only the database dump. Without it the
+# runbook's promise that a mismatched pair is refused would simply be false:
+# swapping the objects directory for another date's would pass every check.
+object_digest() {
+  if [[ "${OBJECT_COUNT}" == "0" ]]; then
+    echo "empty"
+    return
+  fi
+  # Path and content, sorted, so the digest is stable across filesystems.
+  find "${DEST}/objects" -type f -print0 \
+    | LC_ALL=C sort -z \
+    | xargs -0 sha256sum \
+    | sed "s|${DEST}/objects/||" \
+    | sha256sum | cut -d' ' -f1
+}
+
 cat > "${DEST}/manifest.json" <<JSON
 {
   "created_at": "${STAMP}",
-  "database": "${POSTGRES_DB}",
   "bucket": "${S3_BUCKET}",
   "database_sha256": "$(sha256sum "${DEST}/database.dump" | cut -d' ' -f1)",
-  "schema_revision": "$(${COMPOSE} exec -T postgres psql -tAX -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c 'SELECT version_num FROM alembic_version' 2>/dev/null || echo unknown)"
+  "objects_sha256": "$(object_digest)",
+  "object_count": ${OBJECT_COUNT}
 }
 JSON
 

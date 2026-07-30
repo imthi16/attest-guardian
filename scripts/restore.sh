@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Restore a database and object pair produced by scripts/backup.sh.
 #
-# Refuses a mismatched pair on purpose. Restoring a database from Tuesday
-# alongside objects from Thursday produces a system where citations resolve to
-# the wrong text: every check passes, every answer looks grounded, and the
-# evidence quoted is not the evidence stored. Nothing downstream can detect it,
-# so it is caught here or not at all.
+# Everything is validated *before* anything is destroyed. An earlier version
+# checked the manifest, ran `pg_restore --clean`, and only then warned that the
+# objects directory was missing — by which point the database had already been
+# replaced and every restored document row pointed at bytes that were not there.
+# The order below is the whole point of this script.
+#
+# Both digests are checked, because a mismatched pair is the failure nothing
+# downstream can catch: a database from Tuesday with objects from Thursday
+# produces citations that resolve to the wrong text, with every check green.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -14,46 +18,88 @@ if [[ $# -ne 1 ]]; then
 fi
 
 SOURCE="$1"
-POSTGRES_USER="${POSTGRES_USER:-attest}"
-POSTGRES_DB="${POSTGRES_DB:-attest}"
-COMPOSE="${COMPOSE:-docker compose}"
+: "${DATABASE_URL:?set DATABASE_URL to the DSN to restore into}"
+: "${S3_ENDPOINT:?set S3_ENDPOINT}"
+: "${S3_ACCESS_KEY:?set S3_ACCESS_KEY}"
+: "${S3_SECRET_KEY:?set S3_SECRET_KEY}"
+: "${S3_BUCKET:?set S3_BUCKET}"
+
+PG_DSN="${DATABASE_URL/postgresql+asyncpg:/postgresql:}"
+
+for tool in pg_restore mc sha256sum python3; do
+  command -v "${tool}" >/dev/null || { echo "${tool} is required but not on PATH" >&2; exit 1; }
+done
+
+# --- validate everything before touching anything ---------------------------
 
 for required in manifest.json database.dump; do
   [[ -f "${SOURCE}/${required}" ]] || { echo "missing ${required} in ${SOURCE}" >&2; exit 1; }
 done
 
-EXPECTED="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['database_sha256'])" "${SOURCE}/manifest.json")"
-ACTUAL="$(sha256sum "${SOURCE}/database.dump" | cut -d' ' -f1)"
-if [[ "${EXPECTED}" != "${ACTUAL}" ]]; then
-  echo "database.dump does not match its manifest; refusing to restore a corrupt dump" >&2
+read_manifest() {
+  python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" \
+    "${SOURCE}/manifest.json" "$1"
+}
+
+EXPECTED_DB="$(read_manifest database_sha256)"
+ACTUAL_DB="$(sha256sum "${SOURCE}/database.dump" | cut -d' ' -f1)"
+if [[ "${EXPECTED_DB}" != "${ACTUAL_DB}" ]]; then
+  echo "database.dump does not match its manifest; refusing a corrupt dump" >&2
   exit 1
 fi
 
-echo "Restoring ${SOURCE} into ${POSTGRES_DB}."
-echo "This REPLACES current data. The application must not be running."
-read -r -p "Type the database name to continue: " CONFIRM
-[[ "${CONFIRM}" == "${POSTGRES_DB}" ]] || { echo "aborted" >&2; exit 1; }
+EXPECTED_OBJECTS="$(read_manifest objects_sha256)"
+if [[ -z "${EXPECTED_OBJECTS}" ]]; then
+  echo "manifest records no objects digest; this backup predates pair verification." >&2
+  echo "Restoring it cannot be verified as consistent. Take a fresh backup." >&2
+  exit 1
+fi
 
-# `--clean --if-exists` so a partial previous restore does not wedge this one.
-${COMPOSE} exec -T postgres pg_restore \
-  --username="${POSTGRES_USER}" \
-  --dbname="${POSTGRES_DB}" \
-  --clean --if-exists --no-owner --no-privileges \
+# The object snapshot is required, not optional. Without it the restore
+# completes and every citation into a restored document fails to resolve — a
+# database that looks intact and answers that cannot be grounded.
+if [[ "${EXPECTED_OBJECTS}" != "empty" && ! -d "${SOURCE}/objects" ]]; then
+  echo "backup records ${EXPECTED_OBJECTS} objects but ${SOURCE}/objects is missing;" >&2
+  echo "refusing to restore a database whose documents would have no bytes" >&2
+  exit 1
+fi
+
+if [[ -d "${SOURCE}/objects" ]]; then
+  ACTUAL_OBJECTS="$(
+    find "${SOURCE}/objects" -type f -print0 \
+      | LC_ALL=C sort -z \
+      | xargs -0 sha256sum \
+      | sed "s|${SOURCE}/objects/||" \
+      | sha256sum | cut -d' ' -f1
+  )"
+  [[ "$(find "${SOURCE}/objects" -type f | wc -l | tr -d ' ')" == "0" ]] && ACTUAL_OBJECTS="empty"
+  if [[ "${EXPECTED_OBJECTS}" != "${ACTUAL_OBJECTS}" ]]; then
+    echo "objects/ does not match its manifest." >&2
+    echo "This is the failure that cannot be detected later: restoring a database" >&2
+    echo "beside objects from another moment makes citations resolve to the wrong" >&2
+    echo "text, with every check passing. Refusing." >&2
+    exit 1
+  fi
+fi
+
+# --- confirmed and validated; now destructive -------------------------------
+
+echo "Restoring ${SOURCE}."
+echo "This REPLACES the database at ${PG_DSN%%\?*}. The application must not be running."
+read -r -p "Type RESTORE to continue: " CONFIRM
+[[ "${CONFIRM}" == "RESTORE" ]] || { echo "aborted" >&2; exit 1; }
+
+pg_restore --dbname="${PG_DSN}" --clean --if-exists --no-owner --no-privileges \
   < "${SOURCE}/database.dump"
 
 if [[ -d "${SOURCE}/objects" ]]; then
-  ${COMPOSE} run --rm --no-deps --entrypoint sh minio-create-bucket -c "
-    mc alias set restore \"\${MINIO_ENDPOINT}\" \"\${MINIO_ROOT_USER}\" \"\${MINIO_ROOT_PASSWORD}\" >/dev/null &&
-    mc mirror --quiet --overwrite /backup/objects \"restore/\${S3_BUCKET:-attest-documents}\"
-  "
-else
-  echo "WARNING: no objects/ directory. The database will reference documents whose" >&2
-  echo "bytes are absent: every citation into them will fail to resolve." >&2
+  mc alias set attest-restore "${S3_ENDPOINT}" "${S3_ACCESS_KEY}" "${S3_SECRET_KEY}" >/dev/null
+  mc mirror --quiet --overwrite "${SOURCE}/objects" "attest-restore/${S3_BUCKET}"
 fi
 
-# The schema may predate the running code. Migrations are forward-only, so this
-# is the step that makes a restored database usable by the current release.
+# The dump may predate the running release, and migrations are forward-only.
 echo
 echo "Now run migrations before starting the application:"
-echo "  ${COMPOSE} --profile application run --rm migrate"
+echo "  docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml \\"
+echo "    --profile application run --rm migrate"
 echo "Then verify with: scripts/smoke.sh <base-url>"

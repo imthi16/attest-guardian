@@ -40,6 +40,7 @@ services:
     profiles: ["bundled-datastores"]
 
   api:
+    image: ${IMAGE_REGISTRY:-attest}/api:${IMAGE_TAG:?set IMAGE_TAG to the release being deployed}
     environment:
       APP_ENV: production
       # Interactive docs hand a reader a complete map of the API surface.
@@ -47,7 +48,9 @@ services:
       # Reachable only from the Prometheus scraper on this network.
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to the managed PostgreSQL DSN}
+      # The *least* privileged of the three roles: no BYPASSRLS, so row-level
+      # security fences every tenant query beneath the repository scoping.
+      DATABASE_URL: ${API_DATABASE_URL:?set API_DATABASE_URL — a role WITHOUT BYPASSRLS}
       REDIS_URL: ${REDIS_URL:?set REDIS_URL}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a value from your secret manager}
       S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
@@ -68,17 +71,26 @@ services:
         max-file: "5"
 
   worker:
+    image: ${IMAGE_REGISTRY:-attest}/api:${IMAGE_TAG:?set IMAGE_TAG to the release being deployed}
     environment:
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      # A separate role, because the worker's stale-job recovery and purge
+      # sweeps run *across* workspaces and therefore need BYPASSRLS. Granting it
+      # to the shared role instead would silently remove the API's tenant fence;
+      # withholding it leaves crashed jobs stuck and deleted bytes retained.
+      DATABASE_URL: ${WORKER_DATABASE_URL:?set WORKER_DATABASE_URL — a role WITH BYPASSRLS}
       REDIS_URL: ${REDIS_URL:?set REDIS_URL}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
-      OCR_ENGINE: ${OCR_ENGINE:-tesseract}
+      # `none` until a worker image ships the tesseract binary and its
+      # `tam`/`eng` trained data. Defaulting to `tesseract` against the
+      # current image makes every scanned page fail ingestion rather than
+      # producing searchable evidence — see docs/DEPLOYMENT.md.
+      OCR_ENGINE: ${OCR_ENGINE:-none}
     depends_on: !override
       migrate:
         condition: service_completed_successfully
@@ -93,9 +105,12 @@ services:
         max-file: "5"
 
   migrate:
+    image: ${IMAGE_REGISTRY:-attest}/api:${IMAGE_TAG:?set IMAGE_TAG to the release being deployed}
     environment:
       APP_ENV: production
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      # DDL privileges, which neither runtime role should hold: a compromised
+      # API replica must not be able to drop a table.
+      DATABASE_URL: ${MIGRATE_DATABASE_URL:?set MIGRATE_DATABASE_URL — a role with DDL rights}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       REDIS_URL: ${REDIS_URL:?set REDIS_URL}
       S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
@@ -105,6 +120,7 @@ services:
     depends_on: !override []
 
   web:
+    image: ${IMAGE_REGISTRY:-attest}/web:${IMAGE_TAG:?set IMAGE_TAG}
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"

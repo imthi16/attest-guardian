@@ -74,7 +74,35 @@ async def check_database(settings: Settings) -> CheckResult:
 
     if revision is None:
         return CheckResult("database", False, "no alembic_version row; migrations have not run")
+
+    expected = _expected_revision()
+    if expected is not None and revision != expected:
+        return CheckResult(
+            "database",
+            False,
+            f"schema is at {revision}, this release expects {expected}; run the migrate step",
+        )
     return CheckResult("database", True, f"reachable at revision {revision}")
+
+
+def _expected_revision() -> str | None:
+    """The newest revision shipped with this code, or ``None`` if unreadable.
+
+    Read from the migration filenames rather than by importing Alembic: the
+    container that runs preflight need not carry the migrations directory, and a
+    preflight that crashed because it could not find them would block a deploy
+    over its own missing input. Unknown is reported as "no opinion" — the
+    reachability check still stands, and a wrong *guess* here would block a
+    correct deploy, which is the worse error.
+    """
+    from pathlib import Path
+
+    for parent in Path(__file__).resolve().parents:
+        versions = parent / "infra" / "migrations" / "versions"
+        if versions.is_dir():
+            revisions = sorted(path.name.split("_", 1)[0] for path in versions.glob("[0-9]*_*.py"))
+            return revisions[-1] if revisions else None
+    return None
 
 
 async def check_queue(settings: Settings) -> CheckResult:

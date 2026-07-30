@@ -54,16 +54,20 @@ docs_closed() {
   [[ "${EXPECT_DOCS:-closed}" == "open" ]] && return 0
   local status
   status="$(get_status "${BASE_URL}/docs")"
-  [[ "${status}" == "404" ]]
+  [[ "${status}" == "404" || "${status}" == "401" || "${status}" == "403" ]]
 }
 
 # The scrape endpoint has no authentication of its own. Reachable from outside
 # the network boundary, it publishes request volumes and error rates.
+# A proxy in front may answer for the application, so 401/403 count as "not
+# reachable" alongside 404. Requiring 404 exactly would fail a deployment whose
+# proxy blocks the path — which is a *stricter* posture than the one being
+# checked, and failing it would teach people to ignore this script.
 metrics_not_public() {
   [[ "${EXPECT_METRICS:-closed}" == "open" ]] && return 0
   local status
   status="$(get_status "${BASE_URL}/metrics")"
-  [[ "${status}" == "404" ]]
+  [[ "${status}" == "404" || "${status}" == "401" || "${status}" == "403" ]]
 }
 
 # Security headers survive the reverse proxy. A proxy that strips them leaves
@@ -85,6 +89,9 @@ echo
 echo "Not covered here, and worth checking by hand on a first deploy:"
 echo "  - the worker is running (upload a document and watch it reach 'ready')"
 echo "  - TLS terminates in front of this URL and redirects plain HTTP"
+echo "  - the proxy sets Strict-Transport-Security (the app does not; it does"
+echo "    not know whether it is behind TLS, and a wrong HSTS header is"
+echo "    cached by browsers for as long as it claims)"
 
 if [[ ${FAILURES} -gt 0 ]]; then
   echo "${FAILURES} check(s) failed" >&2

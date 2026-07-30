@@ -30,8 +30,14 @@ loop rather than as a failed deploy.
 ## Before the first replica takes traffic
 
 ```bash
-docker compose --profile application run --rm api python -m app.preflight
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml \
+  --profile application run --rm api python -m app.preflight
 ```
+
+**Both files, and the production environment.** Running it against the base file alone resolves the
+development defaults and checks the bundled `postgres`, `redis`, and `minio` — so it can pass while
+the managed database this deployment actually uses is unreachable. A preflight that verifies the
+wrong thing is worse than none, because it is believed.
 
 `Settings` already rejects a default `JWT_SECRET`, a wildcard CORS origin, and a retired embedding
 version at construction. Preflight adds what cannot be checked from environment variables: whether
@@ -83,6 +89,8 @@ because a migration must be backward-compatible with the release before it.
 
 ```bash
 # Roll the application back one release, leaving the schema alone.
+# `IMAGE_TAG` selects the images; the overlay requires it, so a rollback cannot
+# silently redeploy the current build.
 IMAGE_TAG=<previous> docker compose -f docker-compose.yml \
   -f deploy/docker-compose.production.yml --profile application up -d
 scripts/smoke.sh https://attest.example.com
@@ -95,6 +103,11 @@ later one that stops writing the old, rather than one that renames.
 ## Backup and restore
 
 ```bash
+# Both read the deployment's own DATABASE_URL and S3_* settings, and need
+# pg_dump, mc, and sha256sum on PATH. They do not go through Compose: the
+# production topology parks the bundled datastores, so `compose exec postgres`
+# would reach a container that is not running — or, if one were started, would
+# faithfully back up an empty local database and report success.
 scripts/backup.sh                   # -> ./backups/<timestamp>/
 scripts/restore.sh ./backups/<timestamp>
 ```
@@ -104,14 +117,18 @@ key, and a citation is only resolvable while both exist. Backing up one without 
 restore where answers cite evidence that is gone — worse than no backup, because every check passes
 and it looks like it worked.
 
-So both are captured under one timestamp with a manifest, and `restore.sh` refuses a pair whose
-digest does not match. Restoring a database from Tuesday alongside objects from Thursday would make
+So both are captured under one timestamp and the manifest digests **both** the dump and the object
+tree; `restore.sh` verifies both, and validates everything *before* it destroys anything. Restoring a database from Tuesday alongside objects from Thursday would make
 citations resolve to the *wrong text*: no error, no failed check, answers that look grounded and are
 not. Nothing downstream can detect that, so it is caught at restore time or not at all.
 
-This is not a consistent snapshot across two systems. A document uploaded between the two steps will
-be in storage and not in the dump — which is why the database is dumped **first**: an orphaned
-object wastes space, an orphaned row breaks an answer.
+This is not a consistent snapshot across two systems, and there are two windows, not one. A document
+uploaded between the steps lands in storage and not in the dump — harmless, and why the database is
+dumped **first**: an orphaned object wastes space, an orphaned row breaks an answer. The dangerous
+direction is a *permanent delete* between the steps: the row is already in the dump and the worker's
+purge sweep removes the object before the mirror reaches it, leaving a restored citation pointing at
+bytes that are gone. Stop the worker, or pause purging, for the duration of a backup you intend to
+rely on.
 
 After a restore, run migrations before starting the application: the dump may predate the running
 release.
@@ -125,6 +142,15 @@ release.
   drops the cookie — which presents to the user as a wrong password.
 - **The proxy sets `X-Forwarded-Host`.** The upload and streaming relays compare `Origin` against it;
   a proxy that does not set it will have same-origin requests rejected as cross-origin.
+- **Three database roles, not one.** The overlay requires `API_DATABASE_URL`, `WORKER_DATABASE_URL`,
+  and `MIGRATE_DATABASE_URL` separately. The worker's stale-job recovery and purge sweeps run across
+  workspaces and need `BYPASSRLS`; granting that to a shared role would silently remove the API's
+  tenant fence, and withholding it leaves crashed jobs stuck and deleted bytes retained. Migrations
+  need DDL rights that neither runtime role should hold.
+- **OCR is off by default in production.** The API image ships no `tesseract` binary or trained data,
+  so selecting the engine makes every scanned page fail ingestion rather than producing searchable
+  evidence. Build a worker image with `tesseract-ocr`, `tesseract-ocr-tam`, and `tesseract-ocr-eng`
+  before setting `OCR_ENGINE`.
 - **PostgreSQL, Redis, and object storage are managed.** The bundled containers are moved to an
   inactive profile by the production overlay: single containers with no backup, no failover, and no
   upgrade path are right for a laptop and wrong for anything holding a tenant's documents.
@@ -144,6 +170,11 @@ Stated rather than implied, because each is the kind of thing found during an in
 - **No first-class reindex.** Changing `EMBEDDING_MODEL_VERSION` invalidates stored vectors and there
   is no way to re-embed a `READY` document through the API. See `docs/CONFIGURATION.md`; plan a
   version change as a re-ingestion of the workspace.
+- **The backup and restore scripts have not been executed against a real deployment by their
+  author.** They are written against the documented topology and their logic is reviewed, but a
+  script that talks to Docker, PostgreSQL, and an object store cannot be verified by reading it —
+  the first version of these two looked correct and could not have worked. Run both against staging
+  and confirm the restored system answers a question with a citation before trusting either.
 - **Secrets are environment variables.** The overlay reads them from the deploy environment and fails
   the deploy if any is unset (`${VAR:?}`), which is better than a default but is not a secret
   manager: they are visible to anyone who can run `docker inspect` on the host.
