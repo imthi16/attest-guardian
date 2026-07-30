@@ -1,0 +1,140 @@
+# Production overlay. Use with the base file, never alone:
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml \
+#     --profile application up -d
+#
+# What this overlay changes, and why each is not a default:
+#
+# * **No published ports on the application.** The base file binds api and web
+#   to 127.0.0.1 for local work. Here they are reachable only on the Compose
+#   network, behind a reverse proxy that terminates TLS. Publishing them would
+#   put an HTTP service on the host interface with no TLS and no rate limiting
+#   but the application's own.
+# * **No defaults for secrets.** The base file falls back to development values
+#   so `make infra-up` works with no setup. That fallback is exactly what must
+#   not exist here: a `JWT_SECRET` typo would otherwise start the service with a
+#   known signing key. `${VAR:?message}` fails the deploy instead.
+# * **The bundled datastores are gone.** Postgres, Redis, and MinIO run here as
+#   single containers with no backups, no failover, and no upgrade path. That is
+#   right for a laptop and wrong for anything holding a tenant's documents; point
+#   at managed services.
+#
+# Not covered: the reverse proxy itself, certificates, DNS, and host hardening.
+# Those depend on where this runs, and a template pretending otherwise would be
+# copied without being read.
+
+services:
+  # The bundled datastores are moved to a profile nothing here activates, so
+  # `--profile application` starts the application and nothing else. Leaving
+  # them running would be worse than useless: single containers with no backup,
+  # no failover, and no upgrade path, publishing PostgreSQL and MinIO on the
+  # host interface — while `DATABASE_URL` points somewhere else entirely, so
+  # they would hold no data and nobody would notice they were there.
+  postgres:
+    profiles: ["bundled-datastores"]
+  redis:
+    profiles: ["bundled-datastores"]
+  minio:
+    profiles: ["bundled-datastores"]
+  minio-create-bucket:
+    profiles: ["bundled-datastores"]
+
+  api:
+    image: ${IMAGE_REGISTRY:-attest}/api:${IMAGE_TAG:?set IMAGE_TAG to the release being deployed}
+    environment:
+      APP_ENV: production
+      # Interactive docs hand a reader a complete map of the API surface.
+      API_DOCS_ENABLED: "false"
+      # Reachable only from the Prometheus scraper on this network.
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # The *least* privileged of the three roles: no BYPASSRLS, so row-level
+      # security fences every tenant query beneath the repository scoping.
+      DATABASE_URL: ${API_DATABASE_URL:?set API_DATABASE_URL — a role WITHOUT BYPASSRLS}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a value from your secret manager}
+      S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?set the browser origin the web app is served from}
+    ports: !override []
+    depends_on: !override
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  worker:
+    image: ${IMAGE_REGISTRY:-attest}/api:${IMAGE_TAG:?set IMAGE_TAG to the release being deployed}
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # A separate role, because the worker's stale-job recovery and purge
+      # sweeps run *across* workspaces and therefore need BYPASSRLS. Granting it
+      # to the shared role instead would silently remove the API's tenant fence;
+      # withholding it leaves crashed jobs stuck and deleted bytes retained.
+      DATABASE_URL: ${WORKER_DATABASE_URL:?set WORKER_DATABASE_URL — a role WITH BYPASSRLS}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+      # `none` until a worker image ships the tesseract binary and its
+      # `tam`/`eng` trained data. Defaulting to `tesseract` against the
+      # current image makes every scanned page fail ingestion rather than
+      # producing searchable evidence — see docs/DEPLOYMENT.md.
+      OCR_ENGINE: ${OCR_ENGINE:-none}
+    depends_on: !override
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      # Safe to scale: the worker claims each job by compare-and-set, so a
+      # duplicate delivery of one job is deduplicated rather than run twice.
+      replicas: ${WORKER_REPLICAS:-1}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  migrate:
+    image: ${IMAGE_REGISTRY:-attest}/api:${IMAGE_TAG:?set IMAGE_TAG to the release being deployed}
+    environment:
+      APP_ENV: production
+      # DDL privileges, which neither runtime role should hold: a compromised
+      # API replica must not be able to drop a table.
+      DATABASE_URL: ${MIGRATE_DATABASE_URL:?set MIGRATE_DATABASE_URL — a role with DDL rights}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL}
+      S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+    depends_on: !override []
+
+  web:
+    image: ${IMAGE_REGISTRY:-attest}/web:${IMAGE_TAG:?set IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      API_INTERNAL_ORIGIN: http://api:8000
+      # Cookies are `Secure` in production, so the app must be served over TLS
+      # or sign-in silently fails: the browser accepts the response and drops
+      # the cookie, which looks like a wrong password.
+      SESSION_COOKIE_SECURE: "true"
+    ports: !override []
+    depends_on: !override
+      api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

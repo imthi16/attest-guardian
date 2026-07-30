@@ -1,3 +1,18 @@
+# The environment every service running application code needs. Defined once:
+# three hand-maintained copies drift, and the one that drifts is always the
+# service nobody exercises locally — the worker.
+x-app-environment: &app-environment
+  API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+  APP_ENV: ${APP_ENV:-development}
+  METRICS_ENABLED: ${METRICS_ENABLED:-false}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-attest}:${POSTGRES_PASSWORD:-attest}@postgres:5432/${POSTGRES_DB:-attest}
+  JWT_SECRET: ${JWT_SECRET:-development-only-change-me}
+  REDIS_URL: redis://redis:6379/0
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
+  S3_BUCKET: ${S3_BUCKET:-attest-documents}
+  S3_ENDPOINT: http://minio:9000
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
+
 name: attest-guardian
 
 services:
@@ -81,17 +96,7 @@ services:
     profiles: ["application"]
     build:
       context: ./apps/api
-    environment:
-      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
-      APP_ENV: ${APP_ENV:-development}
-      METRICS_ENABLED: ${METRICS_ENABLED:-false}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-attest}:${POSTGRES_PASSWORD:-attest}@postgres:5432/${POSTGRES_DB:-attest}
-      JWT_SECRET: ${JWT_SECRET:-development-only-change-me}
-      REDIS_URL: redis://redis:6379/0
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
-      S3_BUCKET: ${S3_BUCKET:-attest-documents}
-      S3_ENDPOINT: http://minio:9000
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
+    environment: *app-environment
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -100,6 +105,8 @@ services:
       redis:
         condition: service_healthy
       minio-create-bucket:
+        condition: service_completed_successfully
+      migrate:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -147,6 +154,61 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
+
+  # Runs once, to completion, before anything serves. Migrations are a
+  # deployment step rather than something a service does on boot: replicas
+  # starting together would race the same DDL, and a failed migration inside a
+  # startup path presents as a crash loop rather than as a failed deploy.
+  migrate:
+    profiles: ["application"]
+    build:
+      context: ./apps/api
+    command: ["alembic", "-c", "/app/migrations/alembic.ini", "upgrade", "head"]
+    environment: *app-environment
+    volumes:
+      - ./infra/migrations:/app/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  # Without this service, uploads are accepted and never processed. Documents
+  # sit at `pending` forever, the UI shows them queued, and nothing in the API's
+  # health or readiness says a word — running the API without the worker is the
+  # most plausible way to ship a broken product that looks entirely fine.
+  worker:
+    profiles: ["application"]
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "app.ingestion.worker"]
+    environment:
+      <<: *app-environment
+      OCR_ENGINE: ${OCR_ENGINE:-none}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-create-bucket:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    # Deliberately no healthcheck. The worker serves no port, and a check that
+    # only proved the process was alive would report a wedged worker as healthy
+    # — which is the failure that actually happens. Its liveness is visible in
+    # the ingestion metrics and the queue depth, not here.
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
 
 volumes:
   minio_data:

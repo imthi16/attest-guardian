@@ -7,7 +7,7 @@ WEB_DIR := apps/web
 API_VENV := $(API_DIR)/.venv
 API_BIN := $(API_VENV)/bin
 
-.PHONY: help install install-api install-web hooks dev-api dev-web demo-api format format-check lint typecheck test contracts evaluate evaluate-write evaluate-refresh build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
+.PHONY: help install install-api install-web hooks dev-api dev-web demo-api format format-check lint typecheck test contracts preflight smoke evaluate evaluate-write evaluate-refresh build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
 
 help: ## Show available development commands.
 	@awk 'BEGIN {FS = ":.*## "; printf "Attest Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -88,6 +88,17 @@ infra-logs: ## Follow local infrastructure logs.
 
 compose-config: ## Validate the resolved Docker Compose configuration.
 	docker compose config --quiet
+	@API_DATABASE_URL=x WORKER_DATABASE_URL=x MIGRATE_DATABASE_URL=x IMAGE_TAG=validate \
+	 REDIS_URL=x JWT_SECRET=x S3_ENDPOINT=x S3_ACCESS_KEY=x \
+	 S3_SECRET_KEY=x S3_BUCKET=x CORS_ALLOWED_ORIGINS=x \
+	 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml \
+	   --profile application config --quiet
+
+preflight: ## Verify a deployment can reach its database, queue, and bucket.
+	cd $(API_DIR) && .venv/bin/python -m app.preflight
+
+smoke: ## Run post-deploy smoke checks; usage: make smoke url=https://host
+	scripts/smoke.sh $(url)
 
 compose-build: ## Build production API and web container images.
 	docker compose --profile application build api web

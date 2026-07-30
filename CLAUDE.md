@@ -47,6 +47,8 @@ make evaluate              # score the answer pipeline against evaluation/ (see 
 make audit                 # pip-audit + npm audit --audit-level=high
 make check                 # format-check + lint + typecheck + test + evaluate + build + compose-config — run before considering a change done
 make compose-build         # build non-root production api/web images
+make preflight             # can this deployment reach its DB, queue, and bucket?
+make smoke url=https://…   # post-deploy smoke checks (see docs/DEPLOYMENT.md)
 ```
 
 Single-test invocation (no Makefile shortcut — run directly against the venv/npm):
@@ -263,9 +265,21 @@ Repository layout and intended ownership per directory:
   distinct from the per-app test suites under `apps/api/tests` and `apps/web/**/*.test.tsx`.
 
 Local infra (`docker-compose.yml`): `postgres` (pgvector/pgvector image), `redis`, `minio`, and a
-one-shot `minio-create-bucket` job that must complete before the API container starts. `api`/`web`
-containers are under the `application` compose profile (`make compose-build` builds them; `infra-up`
-does not start them) and run `read_only: true` with a `tmpfs` `/tmp`.
+one-shot `minio-create-bucket` job that must complete before the API container starts. The
+`application` profile holds `migrate`, `api`, `worker`, and `web` (`make compose-build` builds
+them; `infra-up` does not start them); all run `read_only: true` with a `tmpfs` `/tmp`.
+**`worker` is the service whose absence is invisible** — without it uploads are accepted and
+never processed while the API stays genuinely healthy, so it is in the file rather than left
+as an exercise. `migrate` runs `alembic upgrade head` once to completion and gates `api` and
+`worker`: replicas booting together would race the same DDL, and a migration failing inside a
+startup path presents as a crash loop rather than a failed deploy. One YAML anchor
+(`x-app-environment`) defines the application environment, because three hand-maintained
+copies drift and the one that drifts is the worker. Production overlays
+`deploy/docker-compose.production.yml`: no published ports, no `:-` defaults for secrets
+(`${VAR:?}` fails the deploy), docs off, and the bundled datastores parked in an inactive
+profile. `docs/DEPLOYMENT.md` is the runbook — deploy, rollback (the app rolls back, the
+schema does not), and backup/restore, where the database and object store must be restored
+as a *pair* or citations resolve to the wrong text with nothing able to detect it.
 
 ## Non-obvious engineering rules
 
