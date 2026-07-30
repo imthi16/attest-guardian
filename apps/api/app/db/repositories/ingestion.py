@@ -12,6 +12,13 @@ from app.db.models.enums import IngestionStatus
 from app.db.models.operations import IngestionJob
 from app.db.repositories.base import WorkspaceScopedRepository
 
+# "Latest run" ordering, shared so the status endpoint and the list endpoint can
+# never disagree about which run decides a document's retryability. `created_at`
+# is `now()`, which in PostgreSQL is transaction-start time, so two jobs inserted
+# in one transaction tie on it; the id breaks the tie arbitrarily but
+# consistently, which is what matters when two queries must pick the same row.
+_LATEST_FIRST = (IngestionJob.created_at.desc(), IngestionJob.id.desc())
+
 
 class IngestionJobRepository(WorkspaceScopedRepository[IngestionJob]):
     model = IngestionJob
@@ -52,7 +59,7 @@ class IngestionJobRepository(WorkspaceScopedRepository[IngestionJob]):
                 func.row_number()
                 .over(
                     partition_by=IngestionJob.document_id,
-                    order_by=IngestionJob.created_at.desc(),
+                    order_by=_LATEST_FIRST,
                 )
                 .label("recency"),
             )
@@ -73,7 +80,7 @@ class IngestionJobRepository(WorkspaceScopedRepository[IngestionJob]):
                 IngestionJob.workspace_id == self.workspace_id,
                 IngestionJob.document_id == document_id,
             )
-            .order_by(IngestionJob.created_at.desc())
+            .order_by(*_LATEST_FIRST)
             .limit(1)
         )
         result = await self._session.scalars(statement)

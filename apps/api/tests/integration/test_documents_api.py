@@ -9,6 +9,7 @@ import io
 import uuid
 import zipfile
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -818,19 +819,24 @@ async def test_permanent_failures_are_not_retryable(
     listing = await client.get(base, headers=owner.headers)
     assert [entry["retryable"] for entry in listing.json()] == [True]
 
-    # Only the latest run decides: an older permanent failure must not make a
-    # freshly retried document look doomed.
+    # Only the latest run decides, and the list must agree with the status
+    # endpoint about which run that is. `created_at` defaults to `now()`, which
+    # is transaction-start time in PostgreSQL, so the newer job's timestamp is
+    # set explicitly rather than tying with the existing one.
     db_session.add(
         IngestionJob(
             workspace_id=uuid.UUID(workspace_id),
             document_id=uuid.UUID(document_id),
             status=IngestionStatus.FAILED,
             permanent_failure=True,
+            created_at=datetime.now(UTC) + timedelta(minutes=1),
         )
     )
     await db_session.flush()
     listing = await client.get(base, headers=owner.headers)
     assert [entry["retryable"] for entry in listing.json()] == [False]
+    progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert progress.json()["retryable"] is False
 
 
 async def test_retryable_reflects_the_callers_own_capability(
