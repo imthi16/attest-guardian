@@ -129,6 +129,64 @@ persisting an untraceable chunk, and reprocessing replaces a version's chunks at
 Do not lower a threshold to make a change pass. Add deterministic tests for real behavior and add
 evaluation cases for retrieval, model, prompt, or verification changes.
 
+## Tests
+
+| Suite | Runs with | Needs |
+| --- | --- | --- |
+| API unit | `cd apps/api && .venv/bin/pytest --ignore=tests/integration` | nothing |
+| API integration | `cd apps/api && .venv/bin/pytest tests/integration` | `make infra-up` (PostgreSQL, Redis, MinIO) |
+| Evaluation | `make evaluate`, and `pytest` runs the suites | nothing |
+| Web | `npm --prefix apps/web run test` | nothing |
+| Contract drift | part of both suites | the committed `packages/contracts/openapi.json` |
+
+`make test` runs the API and web suites with their coverage gates; `make check` adds formatting,
+linting, typing, the evaluation, the production build, and the Compose validation.
+
+Coverage floors are 90% for the API (`pyproject.toml`, `--cov-fail-under`) and 90% for branches,
+functions, lines, and statements on the web (`vitest.config.ts`). They are enforced, and lowering
+one to make a change pass is not an option — add real tests instead. Note that running a *subset*
+of the API suite trips the gate, because coverage is then measured against that subset rather than
+the application; a failing coverage line on a single file is not a signal that the change is broken.
+
+### The contract between the two programs
+
+The web app is a separate program that has to agree with the API about every response body, and it
+agrees by hand: `apps/web/lib/contracts.ts` restates each shape as a Zod schema. A hand-written
+mirror is the right trade — no generator in the browser bundle, and the client can be stricter than
+the server where that helps — but a mirror that drifts is worse than none. It either rejects a valid
+response, so the page reports a transport failure for data that arrived intact, or it accepts a
+field that never comes and renders nothing.
+
+That failure has already happened once: a required `document_id` on the citation mirror, which the
+API deliberately does not return, made every stored conversation fail validation. A reviewer caught
+it; no test did.
+
+So the API generates an OpenAPI document about itself into `packages/contracts/openapi.json`, and
+both sides are pinned to it:
+
+- `apps/api/tests/test_contracts.py` fails if the committed file no longer matches the application.
+- `apps/web/lib/contracts.drift.test.ts` fails if a Zod schema has a field the API does not return,
+  or lacks one it does.
+- `apps/web/lib/attest-api.drift.test.ts` fails if the app requests a path the API does not serve —
+  a renamed route type-checks perfectly and 404s at runtime, on whichever page happens to call it.
+
+Regenerate deliberately when a response model changes:
+
+```bash
+make contracts    # rewrites packages/contracts/openapi.json
+```
+
+Then read the diff. It is the contract, and the web suite is about to be checked against it.
+
+### Determinism
+
+Nothing in either suite sleeps, polls a clock, or depends on wall time: retry backoff takes an
+injected `sleep`, and the evaluation harness is offline and seeded by construction. Fixtures build
+their own object graphs (`apps/api/tests/integration/factories.py`) rather than sharing mutable
+state, and integration tests provision disposable databases. Test data is synthetic throughout — no
+tenant document, no personal data, no real credential — and `gitleaks` runs in CI over the whole
+history as a second line.
+
 ## Branch and review workflow
 
 Create one issue and one branch per reviewable feature, for example `feat/project-foundation`.

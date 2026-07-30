@@ -7,7 +7,7 @@ WEB_DIR := apps/web
 API_VENV := $(API_DIR)/.venv
 API_BIN := $(API_VENV)/bin
 
-.PHONY: help install install-api install-web hooks dev-api dev-web demo-api format format-check lint typecheck test evaluate evaluate-write evaluate-refresh build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
+.PHONY: help install install-api install-web hooks dev-api dev-web demo-api format format-check lint typecheck test contracts evaluate evaluate-write evaluate-refresh build audit check infra-up infra-down infra-logs compose-config compose-build migrate-up migrate-down migrate-new clean
 
 help: ## Show available development commands.
 	@awk 'BEGIN {FS = ":.*## "; printf "Attest Guardian commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -54,6 +54,9 @@ typecheck: ## Run strict Python and TypeScript type checks.
 test: ## Run backend and frontend tests with coverage thresholds.
 	cd $(API_DIR) && .venv/bin/pytest
 	npm --prefix $(WEB_DIR) run test:coverage
+
+contracts: ## Regenerate the OpenAPI document the web app's schemas are checked against.
+	cd $(API_DIR) && .venv/bin/python -m app.contracts
 
 evaluate: ## Score the pipeline against the versioned datasets and print the report.
 	cd $(API_DIR) && .venv/bin/python -m app.evaluation.report

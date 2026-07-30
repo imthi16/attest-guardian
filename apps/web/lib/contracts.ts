@@ -252,8 +252,15 @@ export const resolvedCitationSchema = z.object({
   section: z.string().nullable(),
   language: z.string().nullable(),
   quote: z.string(),
+  // Three coordinate systems, and they are not interchangeable. `quote_char_*`
+  // locates the passage inside its chunk, `chunk_char_*` locates that chunk
+  // inside its page, and `page_quote_char_*` is the sum — the passage's position
+  // on the page. Mirroring all three is what stops a reader of this file
+  // reaching for whichever pair is present and getting a plausible wrong answer.
   quote_char_start: z.number().int(),
   quote_char_end: z.number().int(),
+  chunk_char_start: z.number().int(),
+  chunk_char_end: z.number().int(),
   page_quote_char_start: z.number().int(),
   page_quote_char_end: z.number().int(),
   supporting_text: z.string(),

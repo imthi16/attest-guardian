@@ -72,6 +72,15 @@ jobs:
       # service is reachable from here.
       - name: Evaluate the answer pipeline against the versioned datasets
         run: python -m app.evaluation.report
+      # The committed OpenAPI document is what the web suite checks its schemas
+      # against, so a stale copy would let both sides agree with each other and
+      # neither with the API. `pytest` already fails on drift; this leaves the
+      # regenerated file in the job for a maintainer to diff.
+      - name: Show any drift in the committed API contract
+        if: failure()
+        run: |
+          python -m app.contracts
+          git --no-pager diff -- ../../packages/contracts/openapi.json
 
   web:
     name: Web quality
