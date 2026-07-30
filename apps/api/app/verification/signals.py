@@ -17,8 +17,14 @@ import re
 from dataclasses import dataclass, field
 
 from app.language import normalize_for_match
+from app.language import tokenize as split_words
 
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+# Word tokens come from `app.language.tokenize`, never from a local regex.
+# The idiomatic `[^\W_]+` is wrong for every abugida this platform supports:
+# Python's `\w` covers letters and digits but not the Unicode mark categories,
+# and a Tamil vowel sign is a spacing combining mark, so `விமான` would split
+# into the bare consonants `வ`, `ம`, `ன`. Unrelated Tamil passages then share
+# most of their "tokens" and score as near-identical.
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 # Small-integer number words and multiples of ten, enough for durations,
@@ -165,7 +171,7 @@ class ClaimSignals:
 
 def tokenize(text: str) -> list[str]:
     """Normalized word tokens (case-folded, punctuation stripped)."""
-    return _TOKEN.findall(normalize_for_match(text))
+    return split_words(normalize_for_match(text))
 
 
 def _as_number(token: str) -> float | None:
@@ -261,8 +267,8 @@ def extract_signals(text: str) -> ClaimSignals:
     reflects meaningful terms only.
     """
     normalized = normalize_for_match(text)
-    tokens = _TOKEN.findall(normalized)
-    number_tokens = _TOKEN.findall(_ISO_DATE.sub(" ", normalized))
+    tokens = split_words(normalized)
+    number_tokens = split_words(_ISO_DATE.sub(" ", normalized))
     unit_numbers, bare = extract_unit_numbers(number_tokens)
     content = frozenset(
         t for t in tokens if t not in _STOPWORDS and t not in _NEGATIONS and _as_number(t) is None

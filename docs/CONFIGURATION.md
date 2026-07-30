@@ -41,7 +41,7 @@ The committed `.env.example` contains non-secret local defaults only.
 | `CHUNK_MAX_CHARS` | Maximum characters per chunk | `1200` |
 | `CHUNK_OVERLAP_CHARS` | Context shared between neighboring chunks | `150` |
 | `EMBEDDING_PROVIDER` | Embedding backend (`local`) | `local` |
-| `EMBEDDING_MODEL`, `EMBEDDING_MODEL_VERSION` | Provider provenance stored on every vector | `bge-m3-local`, `hashing-v1` |
+| `EMBEDDING_MODEL`, `EMBEDDING_MODEL_VERSION` | Provider provenance stored on every vector, and the scope of every vector search | `bge-m3-local`, `hashing-v2` |
 | `EMBEDDING_DIMENSIONS` | Vector width; must match the `chunk_embeddings` column | `1024` |
 | `EMBEDDING_BATCH_SIZE` | Inputs per provider call | `32` |
 | `EMBEDDING_MAX_ATTEMPTS`, `EMBEDDING_BACKOFF_SECONDS` | Retry budget for transient provider errors | `3`, `0.5` |
@@ -61,6 +61,17 @@ The committed `.env.example` contains non-secret local defaults only.
 | `INJECTION_FLAG_SCORE` | Aggregate score (0-1) at which a chunk is flagged for review | `0.5` |
 | `INJECTION_QUARANTINE_SCORE` | Aggregate score (0-1) at which a chunk quarantines its document | `0.8` |
 | `INJECTION_QUARANTINE_ON_HIGH_SEVERITY` | Quarantine when any single high-severity signal fires | `true` |
+
+> **`EMBEDDING_MODEL_VERSION` is not a label.** It salts the hashing trick, so it defines the
+> vector space, and `ChunkEmbeddingRepository.search` filters on it, so it also scopes every
+> query. Any change to how text becomes features — a tokenizer, a normalizer, the feature set —
+> must move it, or vectors written under the old behaviour keep being compared against queries
+> embedded under the new one and return silently wrong neighbours. Moving it is safe but not
+> free: vectors at the previous version stop matching, so dense retrieval returns nothing for
+> those chunks until they are re-embedded. Lexical retrieval is unaffected, so fused results
+> degrade rather than disappear. `hashing-v1` → `hashing-v2` accompanied the Tamil tokenizer
+> correction; a workspace ingested before it needs its documents re-processed to restore dense
+> recall.
 
 Injection thresholds are conservative by construction: a document is quarantined when *any* of its
 chunks crosses the quarantine bar, and quarantined content is excluded from retrieval as well as

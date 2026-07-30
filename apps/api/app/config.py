@@ -67,7 +67,12 @@ class Settings(BaseSettings):
     chunk_overlap_chars: int = 150
     embedding_provider: Literal["local"] = "local"
     embedding_model: str = "bge-m3-local"
-    embedding_model_version: str = "hashing-v1"
+    # Bumped from `hashing-v1` when the tokenizer was corrected for Tamil. The
+    # version salts the hashing trick *and* scopes every vector search, so a
+    # change to how text becomes features must move it: without the bump,
+    # vectors written under the old tokenizer would keep being compared
+    # against queries embedded under the new one, in silence.
+    embedding_model_version: str = "hashing-v2"
     embedding_dimensions: int = 1024
     embedding_batch_size: int = 32
     embedding_max_attempts: int = 3
