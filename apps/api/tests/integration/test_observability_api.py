@@ -12,6 +12,7 @@ stopped touching anything.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -20,8 +21,19 @@ import pytest
 from app.config import Settings
 from app.db.session import get_db_session
 from app.main import create_app
+from app.storage.s3 import S3ObjectStorage
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# The same bucket the other storage tests use. Readiness genuinely fails when
+# the configured bucket does not exist — which is correct, and is what a
+# deployment's bucket-creation step exists to prevent — so the test provisions
+# it rather than weakening the probe to tolerate its absence.
+TEST_BUCKET = "attest-test-documents"
+
+
+def probe_settings() -> Settings:
+    return Settings(metrics_enabled=True, s3_bucket=TEST_BUCKET)
 
 
 @dataclass
@@ -45,9 +57,23 @@ class Harness:
         self.app.state.job_queue = UnreachableQueue()
 
 
+@pytest.fixture(scope="session")
+def object_storage() -> S3ObjectStorage:
+    storage = S3ObjectStorage(probe_settings())
+    try:
+        asyncio.run(storage.ensure_bucket())
+    except Exception as error:  # noqa: BLE001 - fail fast with instructions
+        pytest.fail(f"MinIO is required for these tests; start it with `make infra-up` ({error})")
+    return storage
+
+
 @pytest.fixture
-async def harness(db_session: AsyncSession) -> AsyncIterator[Harness]:
-    application = create_app(Settings(metrics_enabled=True))
+async def harness(
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> AsyncIterator[Harness]:
+    del object_storage  # ordering only: the bucket must exist before the probe runs
+    application = create_app(probe_settings())
 
     async def _use_test_session() -> AsyncIterator[AsyncSession]:
         yield db_session
