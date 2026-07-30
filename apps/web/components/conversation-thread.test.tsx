@@ -48,8 +48,8 @@ function answer(overrides: Partial<ConversationMessage> = {}): ConversationMessa
     citations: [
       {
         chunk_id: "c1",
-        document_id: "d1",
         document_version_id: "v1",
+        claim_index: 0,
         claim_text: "Payment is due within thirty days of receipt.",
         quote_text: "due within thirty days",
         quote_start: 23,
@@ -197,6 +197,125 @@ describe("ConversationThread", () => {
     // "Incorrect" is deliberately separate from "not helpful": a refusal may be
     // correct but unhelpful, and only one of those is a grounding failure.
     expect(screen.getByRole("button", { name: "Incorrect" })).toBeInTheDocument();
+  });
+
+  it("puts each claim's evidence under that claim, not under its neighbour", () => {
+    // Claims come back sorted by index; citations come out of an unordered
+    // relationship. Pairing the two lists by position would file the second
+    // claim's passage under the first, which is a citation that looks proven and
+    // supports a different statement.
+    renderThread([
+      question(),
+      answer({
+        content: "- The notice period is ninety days.\n- Payment is due within thirty days.",
+        citations: [
+          {
+            chunk_id: "c2",
+            document_version_id: "v1",
+            claim_index: 1,
+            claim_text: "Payment is due within thirty days.",
+            quote_text: "due within thirty days",
+            quote_start: 23,
+            quote_end: 45,
+            page_number: 12,
+          },
+          {
+            chunk_id: "c1",
+            document_version_id: "v1",
+            claim_index: 0,
+            claim_text: "The notice period is ninety days.",
+            quote_text: "ninety days",
+            quote_start: 4,
+            quote_end: 15,
+            page_number: 7,
+          },
+        ],
+        claims: [
+          {
+            claim_index: 0,
+            claim_text: "The notice period is ninety days.",
+            verdict: "supported",
+            confidence: 0.9,
+            verifier: "entailment-verifier-v1",
+          },
+          {
+            claim_index: 1,
+            claim_text: "Payment is due within thirty days.",
+            verdict: "supported",
+            confidence: 0.85,
+            verifier: "entailment-verifier-v1",
+          },
+        ],
+      }),
+    ]);
+
+    const claims = document.querySelectorAll(".claim");
+    expect(claims).toHaveLength(2);
+    expect(claims[0]).toHaveTextContent("The notice period is ninety days.");
+    expect(claims[0]).toHaveTextContent("Page 7");
+    expect(claims[1]).toHaveTextContent("Payment is due within thirty days.");
+    expect(claims[1]).toHaveTextContent("Page 12");
+  });
+
+  it("marks a Tamil question as Tamil so it is not read out as English", () => {
+    // The document is `lang="en"`; an unmarked Tamil string is announced with
+    // English pronunciation rules, which is not merely accented but unusable.
+    renderThread([question({ content: "பணம் எப்போது செலுத்த வேண்டும்?", language: "tam" })]);
+
+    expect(screen.getByText("பணம் எப்போது செலுத்த வேண்டும்?")).toHaveAttribute("lang", "ta");
+  });
+
+  it("leaves Tanglish unmarked rather than mislabelling its script", () => {
+    // Tamil written in Latin script is neither `ta` nor `en`, and claiming
+    // either would make a screen reader read it wrongly with confidence.
+    renderThread([question({ content: "payment eppo due?", language: "tanglish" })]);
+
+    expect(screen.getByText("payment eppo due?")).not.toHaveAttribute("lang");
+  });
+
+  it("explains a refusal instead of printing its machine code", () => {
+    renderThread([
+      question(),
+      answer({
+        answer_status: "abstained",
+        content: "There is not enough evidence in this workspace to answer that.",
+        decision: "abstain",
+        // The early gates put the same stable code in both fields.
+        decision_reason: "insufficient_evidence",
+        abstention_reason: "insufficient_evidence",
+        citations: [],
+        claims: [],
+      }),
+    ]);
+
+    expect(screen.queryByText(/insufficient_evidence/)).not.toBeInTheDocument();
+    // Said once, not twice, even though both fields carried it.
+    expect(
+      screen.getAllByText(/Nothing in this workspace's documents was close enough/),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the pipeline's own prose when it wrote prose", () => {
+    renderThread([
+      question(),
+      answer({ decision_reason: "the cited evidence is a low-confidence OCR reading" }),
+    ]);
+
+    expect(
+      screen.getByText("the cited evidence is a low-confidence OCR reading"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a multi-claim answer's line structure", () => {
+    // The answer is composed as one `- claim` line per statement; collapsing
+    // those newlines runs distinct statements into one sentence.
+    renderThread([
+      question(),
+      answer({ content: "- The notice period is ninety days.\n- Payment is due in thirty." }),
+    ]);
+
+    const text = document.querySelector(".answer-text");
+    expect(text?.textContent).toContain("\n");
   });
 
   it("renders a claim with no matching citation without inventing evidence", () => {

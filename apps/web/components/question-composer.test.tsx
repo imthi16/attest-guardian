@@ -203,6 +203,30 @@ describe("QuestionComposer", () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).signal?.aborted).toBe(true);
   });
 
+  it("does not call a stream that ended without an answer a success", async () => {
+    // A 200 says the question was accepted, not answered. If a proxy closes the
+    // response cleanly after only stage events, the read loop ends normally
+    // while the API has persisted the question and nothing else — reporting
+    // success there would leave the asker believing an answer exists.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          streamOf([frame("stage", { stage: "retrieve" }), frame("stage", { stage: "generate" })]),
+        ),
+    );
+    renderComposer();
+
+    await ask("When is payment due?");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The connection closed before an answer arrived",
+    );
+    // The question stays in the box so it can be asked again as typed.
+    expect(screen.getByLabelText(/Ask a question/)).toHaveValue("When is payment due?");
+  });
+
   it("reports an unreachable service", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
     renderComposer();

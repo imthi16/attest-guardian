@@ -19,7 +19,11 @@ const context = {
 
 function request(
   body: unknown,
-  overrides: Readonly<{ host?: string; origin?: string | null }> = {},
+  overrides: Readonly<{
+    contentLength?: string | null;
+    host?: string;
+    origin?: string | null;
+  }> = {},
 ): NextRequest {
   const headers = new Map<string, string>();
   const origin = overrides.origin === undefined ? `https://${APP_HOST}` : overrides.origin;
@@ -27,6 +31,15 @@ function request(
     headers.set("origin", origin);
   }
   headers.set("host", overrides.host ?? APP_HOST);
+  // A browser always declares the length of a JSON body; the relay refuses to
+  // buffer one that does not.
+  const length =
+    overrides.contentLength === undefined
+      ? String(JSON.stringify(body ?? "").length)
+      : overrides.contentLength;
+  if (length !== null) {
+    headers.set("content-length", length);
+  }
   return {
     headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
     json: async () => {
@@ -100,6 +113,7 @@ describe("POST .../conversations/[conversationId]/stream", () => {
       ["origin", "https://public.example"],
       ["host", "internal:3000"],
       ["x-forwarded-host", "public.example"],
+      ["content-length", "32"],
     ]);
     const proxied = {
       headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
@@ -118,6 +132,38 @@ describe("POST .../conversations/[conversationId]/stream", () => {
 
   it("rejects a body that is not JSON", async () => {
     expect((await POST(request(undefined), context)).status).toBe(400);
+  });
+
+  it("refuses an oversized body without buffering it", async () => {
+    // The length checks above run only after `request.json()` has pulled the
+    // whole body into the process, so the bound has to come first: a forged
+    // Origin is enough to reach this line without a session.
+    const json = vi.fn();
+    const oversized = {
+      headers: {
+        get: (name: string) =>
+          ({
+            "content-length": String(1024 * 1024),
+            host: APP_HOST,
+            origin: `https://${APP_HOST}`,
+          })[name.toLowerCase()] ?? null,
+      },
+      json,
+    } as unknown as NextRequest;
+
+    expect((await POST(oversized, context)).status).toBe(413);
+    expect(json).not.toHaveBeenCalled();
+    expect(mockedStream).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body that declares no length at all", async () => {
+    const response = await POST(
+      request({ question: "anything" }, { contentLength: null }),
+      context,
+    );
+
+    expect(response.status).toBe(411);
+    expect(mockedStream).not.toHaveBeenCalled();
   });
 
   it("passes the API's refusal through with its stable code", async () => {

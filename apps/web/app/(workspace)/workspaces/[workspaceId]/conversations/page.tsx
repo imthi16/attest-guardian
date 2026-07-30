@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { AccessNotice } from "../../../../../components/access-notice";
 import { Feedback } from "../../../../../components/feedback";
+import { LocalTime } from "../../../../../components/local-time";
 import { StartConversationForm } from "../../../../../components/start-conversation-form";
 import { SystemState } from "../../../../../components/system-state";
 import { WorkspaceNav } from "../../../../../components/workspace-nav";
@@ -110,9 +111,9 @@ export default async function ConversationsPage({ params, searchParams }: Conver
                       {/* Titles are caller-supplied text, rendered as a text child. */}
                       {conversation.title ?? "Untitled thread"}
                     </Link>
-                    <time className="thread-time" dateTime={conversation.updated_at}>
-                      {new Date(conversation.updated_at).toLocaleString()}
-                    </time>
+                    {/* Formatted in the browser: this is a Server Component,
+                        and the server's zone is not the reader's. */}
+                    <LocalTime className="thread-time" value={conversation.updated_at} />
                   </li>
                 ))}
               </ul>

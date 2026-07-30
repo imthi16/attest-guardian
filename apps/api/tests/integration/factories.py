@@ -149,10 +149,17 @@ async def make_conversation_with_answer(
     return message
 
 
-async def make_citation(session: AsyncSession, message: Message, chunk: Chunk) -> Citation:
+async def make_citation(
+    session: AsyncSession,
+    message: Message,
+    chunk: Chunk,
+    *,
+    claim_index: int = 0,
+) -> Citation:
     citation = Citation(
         message_id=message.id,
         chunk_id=chunk.id,
+        claim_index=claim_index,
         claim_text="A synthetic claim.",
         claim_start=0,
         claim_end=18,

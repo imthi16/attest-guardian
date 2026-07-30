@@ -13,9 +13,10 @@
  * answering budget. Next.js applies the equivalent check to server actions
  * itself; a route handler has to make it explicitly.
  *
- * The body is piped through untouched. Buffering it would defeat the point, and
- * re-encoding events would risk this relay disagreeing with the API about what
- * the answer was.
+ * The *response* body is piped through untouched. Buffering it would defeat the
+ * point, and re-encoding events would risk this relay disagreeing with the API
+ * about what the answer was. The *request* body is the opposite case: it is
+ * bounded before it is read, because reading it is what allocates it.
  */
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -28,6 +29,17 @@ type RouteContext = Readonly<{
 
 /** A question long enough to be abusive is refused before it is relayed. */
 const MAX_QUESTION_LENGTH = 2000;
+
+/**
+ * The largest JSON envelope a legitimate question can arrive in.
+ *
+ * `request.json()` buffers the whole body before anything in it can be
+ * inspected, so the length checks below are useless as a memory bound — by the
+ * time they run the bytes are already in the process. This caps the body first,
+ * generously enough for a maximum-length question escaped character by
+ * character plus its surrounding object.
+ */
+const MAX_BODY_BYTES = 64 * 1024;
 
 function failure(status: number, code: string, message: string): NextResponse {
   return NextResponse.json({ detail: { code, message } }, { status });
@@ -63,6 +75,18 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
 
   if (!isSameOrigin(request)) {
     return failure(403, clientErrorCodes.forbidden, "This request did not come from the app.");
+  }
+
+  // Bounded before the body is buffered: an unauthenticated caller that forges
+  // the `Origin` header reaches this line, and `request.json()` would otherwise
+  // pull an arbitrarily large object into the Next.js process before
+  // `authorizedStream` ever checks the session.
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (!Number.isFinite(declaredLength) || declaredLength <= 0) {
+    return failure(411, clientErrorCodes.validation, "The question needs a Content-Length.");
+  }
+  if (declaredLength > MAX_BODY_BYTES) {
+    return failure(413, clientErrorCodes.validation, "That question is too long.");
   }
 
   let payload: unknown;

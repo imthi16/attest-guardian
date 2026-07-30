@@ -984,6 +984,9 @@ h2 {
   margin: 0.5rem 0 0;
   font-size: 1.05rem;
   line-height: 1.6;
+  /* One line per supported statement: the answer is composed as `- claim`
+     lines, and collapsing those newlines would run the statements together. */
+  white-space: pre-line;
 }
 
 .question-reading,
@@ -1114,6 +1117,13 @@ h2 {
 .evidence-document {
   font-weight: 700;
   color: var(--ink);
+}
+
+/* Where the passage sits in its page, and how well it was read. Both are
+   qualifications on the evidence, so they stay quieter than the passage. */
+.evidence-offsets,
+.evidence-ocr {
+  font-variant-numeric: tabular-nums;
 }
 
 .evidence-quote {
