@@ -55,7 +55,7 @@ from app.ingestion.scanner import MalwareScanner
 from app.language import detect_language
 from app.observability import context as trace_context
 from app.observability.logging import configure_logging
-from app.observability.metrics import INGESTION_DURATION, INGESTION_STAGES
+from app.observability.metrics import INGESTION_DURATION, INGESTION_JOBS, INGESTION_STAGES
 from app.parsing.ocr import NullOcrEngine, OcrEngine
 from app.parsing.pdf import parse_pdf, render_pdf_page_png
 from app.parsing.text import parse_docx, parse_text
@@ -234,6 +234,7 @@ class IngestionWorker:
                 )
                 return False
             job.status = IngestionStatus.RUNNING
+            INGESTION_JOBS.increment(result="claimed")
             job.started_at = datetime.now(UTC)
             job.attempts += 1
             job.error = None
@@ -673,6 +674,7 @@ class IngestionWorker:
                 resource_id=job.document_id,
                 workspace_id=message.workspace_id,
             )
+        INGESTION_JOBS.increment(result="succeeded")
         logger.info("ingestion succeeded", extra={"job_id": str(message.job_id)})
 
     async def _quarantine(self, message: JobMessage, reason: str) -> None:

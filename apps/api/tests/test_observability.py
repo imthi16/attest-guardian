@@ -401,3 +401,58 @@ async def test_a_failing_request_is_measured_and_logged_before_it_propagates() -
     assert failures
     assert failures[0]["error_type"] == "RuntimeError"
     assert failures[0]["status"] == 500
+
+
+def test_uvicorn_loggers_are_adopted_rather_than_left_in_plain_text() -> None:
+    """The leak that would have defeated this whole module.
+
+    Under the container entry point uvicorn configures `uvicorn.error` with its
+    own non-propagating handler *before* importing the application. Clearing
+    only the root's handlers leaves it emitting plain text — and what it emits
+    is the traceback of an unhandled request exception, which is the richest
+    tenant content in the system: a driver error carries its bound parameters,
+    meaning the raw query and sometimes evidence text.
+    """
+    uvicorn_error = logging.getLogger("uvicorn.error")
+    uvicorn_error.propagate = False
+    leaked = io.StringIO()
+    uvicorn_error.addHandler(logging.StreamHandler(leaked))
+
+    stream = io.StringIO()
+    configure_logging("INFO", stream=stream)
+    try:
+        raise ValueError("statement failed for parameters: 'a tenant question'")
+    except ValueError:
+        uvicorn_error.exception("Exception in ASGI application")
+
+    assert uvicorn_error.handlers == []
+    assert uvicorn_error.propagate is True
+    assert leaked.getvalue() == ""
+    record = json.loads(stream.getvalue().strip())
+    assert record["error_type"] == "ValueError"
+    assert "a tenant question" not in stream.getvalue()
+
+
+async def test_probes_are_exempt_from_the_global_rate_limit() -> None:
+    """Rate limiting a probe breaks the thing it exists for.
+
+    Where probes and traffic share a source address — one reverse proxy, a
+    service mesh — ordinary load exhausts the limiter and `/readyz` returns 429
+    while every dependency is healthy. The orchestrator reads that as down and
+    removes a working replica, turning a traffic spike into an outage.
+    """
+    settings = Settings(_env_file=None, global_rate_limit_attempts=1, metrics_enabled=True)
+    async with client(settings) as http:
+        await http.get("/api/v1/does-not-exist")  # consume the only slot
+        assert (await http.get("/api/v1/does-not-exist")).status_code == 429
+
+        assert (await http.get("/health")).status_code == 200
+        assert (await http.get("/metrics")).status_code == 200
+
+
+def test_the_readiness_contract_declares_its_degraded_response() -> None:
+    """A client generated from a contract claiming only 200 treats the state
+    this endpoint exists to report as an unexpected error."""
+    schema = create_app(Settings(_env_file=None)).openapi()
+
+    assert set(schema["paths"]["/readyz"]["get"]["responses"]) >= {"200", "503"}

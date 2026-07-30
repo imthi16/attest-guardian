@@ -241,6 +241,11 @@ INGESTION_STAGES = REGISTRY.counter(
     "attest_ingestion_stages",
     "Ingestion stage completions by stage and result.",
 )
+INGESTION_JOBS = REGISTRY.counter(
+    "attest_ingestion_jobs",
+    "Ingestion jobs by result. Distinct from stage counts: a job claimed with "
+    "no stage completing is a stalled worker, which no stage metric can show.",
+)
 INGESTION_DURATION = REGISTRY.histogram(
     "attest_ingestion_stage_duration_seconds",
     "Duration of one ingestion stage.",
@@ -266,6 +271,7 @@ __all__ = [
     "CLAIMS",
     "DEFAULT_BUCKETS",
     "INGESTION_DURATION",
+    "INGESTION_JOBS",
     "INGESTION_STAGES",
     "MODEL_CALLS",
     "MODEL_DURATION",

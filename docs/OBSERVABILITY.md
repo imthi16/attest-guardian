@@ -123,5 +123,10 @@ silently detach whatever handler its caller had installed.
   multi-replica deployment must aggregate across scrape targets rather than expecting one total.
 - Alert thresholds are starting points; nothing has run in production and any claim they are tuned
   would be invented.
-- The worker exposes no scrape endpoint — it is not an HTTP server. Its metrics are visible only in
-  its logs until a push gateway or a sidecar is added.
+- **The worker exposes no scrape endpoint.** It is not an HTTP server, so its counters live only in
+  its own process and `/metrics` on the API cannot see them. The ingestion alerts in
+  `infra/monitoring/alerts.yml` therefore have no data until a push gateway or a sidecar exporter
+  is added — they are written and correct, and they will not fire. Treat that as the first task
+  when deploying the worker, not as a detail.
+- OCR is not instrumented. Embedding and rerank calls feed `attest_model_calls`; the OCR engine
+  does not, so `AttestModelProviderFailing` covers two of the three providers.

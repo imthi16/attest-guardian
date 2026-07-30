@@ -137,6 +137,10 @@ class RagService:
                 continue
             terminal.trace.total_ms = (time.perf_counter() - start) * 1000
             await self._record(workspace_id, actor_user_id, terminal.trace, conversation_id)
+            # Streaming is the chat UI's path, so leaving it unobserved would
+            # have meant the abstention metric missed almost every real answer
+            # while looking healthy on the JSON route nobody uses interactively.
+            _observe(terminal)
             logger.info(
                 "rag answer completed",
                 extra={

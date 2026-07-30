@@ -95,11 +95,18 @@ groups:
     interval: 1m
     rules:
       - alert: AttestIngestionStalled
-        # Documents entering the pipeline but no stage completing. A worker that
-        # died mid-job leaves the queue growing in silence.
+        # Jobs are being claimed and no stage is completing: a worker that died
+        # mid-job leaves the queue growing in silence.
+        #
+        # The first draft of this rule compared the stage rate against the
+        # *lifetime* stage counter, which is satisfied by any quiet period after
+        # the first successful ingestion — it would have paged continuously
+        # whenever nobody was uploading. Evidence of queued work is what makes
+        # the difference between stalled and idle, so the claim rate is the
+        # left-hand side.
         expr: >-
-          sum(rate(attest_ingestion_stages_total[15m])) == 0
-          and sum(attest_ingestion_stages_total) > 0
+          sum(rate(attest_ingestion_jobs_total{result="claimed"}[15m])) > 0
+          and sum(rate(attest_ingestion_stages_total[15m])) == 0
         for: 15m
         labels:
           severity: page

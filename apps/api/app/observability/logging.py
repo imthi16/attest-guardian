@@ -84,12 +84,24 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
 
 
-def configure_logging(level: str = "INFO", *, stream: Any | None = None) -> None:
-    """Install the JSON formatter as the only handler on the root logger.
+# Loggers that install their own handler and then refuse to propagate, so
+# clearing the root's leaves them emitting plain text. `uvicorn.error` is the
+# one that matters: it logs an unhandled request exception with a full
+# traceback, and a traceback is the richest tenant content in the system —
+# a driver error carries the bound parameters, which is the raw query and
+# sometimes evidence text. Under the container entry point uvicorn configures
+# these *before* importing the application, so redacting only the root logger
+# would leave the single most dangerous line in the system unredacted.
+_ADOPTED_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access", "gunicorn.error")
 
-    Replaces existing handlers rather than adding to them: a second plain-text
-    handler would re-emit every record unredacted, which is the failure this
-    module exists to prevent and would be invisible in a normal test run.
+
+def configure_logging(level: str = "INFO", *, stream: Any | None = None) -> None:
+    """Make the JSON formatter the only way anything in this process logs.
+
+    Handlers are replaced rather than added to: a surviving plain-text handler
+    would re-emit every record unredacted, and it would do so invisibly, because
+    the correct JSON line still appears while a second copy goes elsewhere in
+    full.
     """
     handler = logging.StreamHandler(stream) if stream is not None else logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
@@ -99,6 +111,13 @@ def configure_logging(level: str = "INFO", *, stream: Any | None = None) -> None
         root.removeHandler(existing)
     root.addHandler(handler)
     root.setLevel(level)
+
+    for name in _ADOPTED_LOGGERS:
+        adopted = logging.getLogger(name)
+        for existing in list(adopted.handlers):
+            adopted.removeHandler(existing)
+        # Propagate to the root, which now has the only handler there is.
+        adopted.propagate = True
 
 
 __all__ = ["JsonFormatter", "configure_logging"]

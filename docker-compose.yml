@@ -84,6 +84,7 @@ services:
     environment:
       API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
       APP_ENV: ${APP_ENV:-development}
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-attest}:${POSTGRES_PASSWORD:-attest}@postgres:5432/${POSTGRES_DB:-attest}
       JWT_SECRET: ${JWT_SECRET:-development-only-change-me}
       REDIS_URL: redis://redis:6379/0

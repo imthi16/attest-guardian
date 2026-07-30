@@ -20,7 +20,14 @@ from app.security.events import log_security_event
 
 # Endpoints that must stay reachable for liveness/readiness probes even when a
 # caller is otherwise rate limited.
-_RATE_LIMIT_EXEMPT_PATHS = frozenset({"/health", "/api/v1/health"})
+# Operator surfaces, exempt because rate limiting them breaks the thing they
+# exist for. Where probes and application traffic share a source address — one
+# reverse proxy, a service mesh — ordinary load exhausts the global limiter and
+# `/readyz` starts returning 429 while every dependency is healthy. The
+# orchestrator reads that as "down" and removes a working replica, which turns a
+# traffic spike into an outage. `/metrics` is included for the same reason: a
+# scrape that fails under load takes away the data needed to explain the load.
+_RATE_LIMIT_EXEMPT_PATHS = frozenset({"/health", "/api/v1/health", "/readyz", "/metrics"})
 
 Dispatch = Callable[[Request], Awaitable[Response]]
 
@@ -167,7 +174,13 @@ def configure_security(app: FastAPI, settings: Settings) -> None:
         allow_origins=settings.cors_origins(),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        # `traceparent` is accepted so a browser client can join its own trace
+        # to the server's, and both correlation headers are exposed so a user
+        # reporting a failure can quote an id that appears in the logs. Without
+        # `expose_headers` the browser receives them and refuses to reveal them
+        # to the page, which is indistinguishable from not sending them.
+        allow_headers=["Authorization", "Content-Type", "traceparent"],
+        expose_headers=["X-Request-ID", "traceparent"],
         max_age=600,
     )
 

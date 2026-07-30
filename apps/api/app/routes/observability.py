@@ -58,7 +58,14 @@ def _probes(request: Request, session: AsyncSession) -> dict[str, readiness.Prob
     return {"database": database, "object_storage": storage, "queue": queue}
 
 
-@router.get("/readyz", response_model=ReadinessResponse)
+@router.get(
+    "/readyz",
+    response_model=ReadinessResponse,
+    # Declared so a generated client can model the degraded case. Without it the
+    # contract claims 200 is the only outcome, and every client treats the state
+    # this endpoint exists to report as an unexpected error.
+    responses={503: {"model": ReadinessResponse, "description": "A dependency is unreachable."}},
+)
 async def readyz(request: Request, session: SessionDep, response: Response) -> ReadinessResponse:
     """Report whether every dependency this process needs is reachable.
 
