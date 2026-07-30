@@ -18,16 +18,19 @@ import json
 from app.evaluation.datasets import load_datasets
 from app.evaluation.harness import (
     QueryOutcome,
+    default_config,
     run_injection,
     run_isolation,
     run_queries,
 )
 from app.evaluation.report import (
+    RECALL_RANKS,
     Failure,
     build_report,
     check,
     report_path,
     retrieval_metrics,
+    serialize,
 )
 from app.evaluation.thresholds import load_thresholds
 from app.rag.types import AnswerOutcome
@@ -96,8 +99,9 @@ def test_the_committed_baseline_matches_a_fresh_run() -> None:
         python -m app.evaluation.report --write
     """
     committed = json.loads(report_path().read_text(encoding="utf-8"))
-    fresh = {**REPORT, "threshold_version": THRESHOLDS.version}
-    fresh.pop("performance", None)
+    # Through the same serializer the CLI uses, so the comparison cannot drift
+    # from what `--write` would actually produce.
+    fresh = json.loads(serialize(REPORT, THRESHOLDS))
 
     assert committed == fresh
 
@@ -221,3 +225,70 @@ def test_timings_are_reported_but_carry_no_threshold() -> None:
     # Nearest-rank, so the p95 is one of the observed durations and cannot come
     # in under the mean of the same sample.
     assert REPORT["performance"]["p95_seconds"] >= REPORT["performance"]["mean_seconds"]
+
+
+def test_retrieval_is_scored_before_the_evidence_gate_truncates() -> None:
+    """Reading ranks off the surviving evidence would measure the cap, not the ranker.
+
+    `max_evidence` is 4, so a Recall@5 computed over `evidence_ids` could never
+    inspect a fifth result: a relevant chunk at rank 5 would register as a miss
+    no matter how much the ranking improved.
+    """
+    config = default_config()
+    assert config.max_evidence < max(RECALL_RANKS)
+
+    widest = max(len(result.retrieved_ids) for result in OUTCOMES)
+    assert widest > config.max_evidence, "no query retrieves past the cap; the test proves nothing"
+    for result in OUTCOMES:
+        assert len(result.evidence_ids) <= config.max_evidence
+        assert set(result.evidence_ids) <= set(result.retrieved_ids)
+
+
+def test_resolvability_covers_every_citation_the_pipeline_emitted() -> None:
+    """Including citations on a query it answered but should not have.
+
+    Scoping the numerator to all outcomes and the denominator to answerable ones
+    lets a failure subtract from a count that never included it — and report a
+    rate above 1.0.
+    """
+    emitted = sum(len(result.cited_ids) for result in OUTCOMES)
+    answerable_only = sum(len(r.cited_ids) for r in OUTCOMES if r.case.answerable)
+
+    assert emitted > answerable_only, "no unanswerable query was answered; the test proves nothing"
+    resolvable = REPORT["metrics"]["citations"]["resolvable"]
+    assert resolvable is not None
+    assert 0.0 <= resolvable <= 1.0
+
+
+def test_the_report_identifies_the_data_and_floors_it_used() -> None:
+    """A version label is a string someone has to remember to bump; a digest is not.
+
+    Without them a report can claim to have been measured against data and bars
+    that have since changed, which makes every number in it unreproducible.
+    """
+    assert REPORT["dataset_digests"] == DATASETS.digests
+    assert set(REPORT["dataset_file_versions"]) == set(DATASETS.file_versions)
+
+    serialized = json.loads(serialize(REPORT, THRESHOLDS))
+    assert serialized["threshold_digest"] == THRESHOLDS.digest
+    assert len(serialized["threshold_digest"]) == 64
+
+
+def test_a_scan_with_no_recorded_confidence_scores_below_a_good_one() -> None:
+    """Unknown reliability is not high reliability, and must not price as if it were.
+
+    The engine read the page and declined to say how well — strictly less
+    information than a measured score. Scoring it as born-digital text would make
+    the least verifiable evidence in a workspace indistinguishable from the most.
+    """
+    unknown = outcome("q-service-scanned-ta")
+    confident = outcome("q-warranty-scanned")
+    born_digital = outcome("q-notice-en")
+
+    assert DATASETS.chunk(unknown.cited_ids[0]).ocr_confidence is None
+    assert unknown.confidence < confident.confidence
+    assert unknown.confidence < born_digital.confidence
+    # But not treated as worthless either: a scan from an engine that reports no
+    # confidence is still usable evidence, and refusing every one of them would
+    # withhold answers from whole documents.
+    assert unknown.answered

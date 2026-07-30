@@ -138,13 +138,20 @@ def citation_metrics(outcomes: Sequence[QueryOutcome]) -> dict[str, float | None
     wanted_cited = sum(
         len(outcome.case.relevant_ids.intersection(outcome.cited_ids)) for outcome in answerable
     )
+    # Resolvability spans *every* citation the pipeline emitted, including those
+    # on a query labelled unanswerable that it answered anyway. Precision and
+    # recall are questions about answerable queries; "does this citation resolve"
+    # is a question about the citation, and scoping the two denominators
+    # differently would let a failure on an unlabelled answer subtract from a
+    # count that never included it — and report resolvability above 1.0.
+    emitted = sum(len(outcome.cited_ids) for outcome in outcomes)
     unresolvable = sum(outcome.unresolvable_citations for outcome in outcomes)
     return {
         "precision": rate(cited_relevant, cited_total),
         "recall": rate(wanted_cited, wanted_total),
         # Every citation the pipeline emits must survive the same resolver the
         # public API uses, so this is a rate that has to be 1.0, not a target.
-        "resolvable": rate(cited_total - unresolvable, cited_total),
+        "resolvable": rate(emitted - unresolvable, emitted),
     }
 
 
@@ -230,6 +237,13 @@ def build_report(datasets: EvaluationDatasets) -> dict[str, Any]:
 
     return {
         "dataset_version": datasets.version,
+        # The identity of what was actually scored. Version labels are strings
+        # someone has to remember to bump, and nothing enforces it — so a report
+        # carrying only labels can describe data that has since changed. The
+        # digests cannot be forgotten, and the threshold digest covers the floors
+        # for the same reason.
+        "dataset_digests": dict(datasets.digests),
+        "dataset_file_versions": dict(datasets.file_versions),
         "configuration": {
             "top_k": config.top_k,
             "max_evidence": config.max_evidence,
@@ -278,8 +292,12 @@ def report_path(root: Path | None = None) -> Path:
     return (root or evaluation_root()) / "reports" / REPORT_NAME
 
 
-def _serialize(report: dict[str, Any], thresholds: Thresholds) -> str:
-    payload = {**report, "threshold_version": thresholds.version}
+def serialize(report: dict[str, Any], thresholds: Thresholds) -> str:
+    payload = {
+        **report,
+        "threshold_version": thresholds.version,
+        "threshold_digest": thresholds.digest,
+    }
     # Timings differ between machines, so they are dropped from the committed
     # baseline: a report that changed on every run would be reviewed by nobody.
     payload.pop("performance", None)
@@ -295,10 +313,10 @@ def _main(argv: list[str]) -> int:
     if "--write" in argv:
         path = report_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_serialize(report, thresholds), encoding="utf-8")
+        path.write_text(serialize(report, thresholds), encoding="utf-8")
         sys.stdout.write(f"wrote {path}\n")
     else:
-        sys.stdout.write(_serialize(report, thresholds))
+        sys.stdout.write(serialize(report, thresholds))
 
     for failure in failures:
         sys.stderr.write(f"FAIL {failure}\n")
@@ -322,5 +340,6 @@ __all__ = [
     "isolation_metrics",
     "performance_metrics",
     "report_path",
+    "serialize",
     "retrieval_metrics",
 ]

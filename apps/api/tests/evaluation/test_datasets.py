@@ -216,3 +216,85 @@ def test_malformed_thresholds_file_is_reported(sandbox: Path) -> None:
 
     with pytest.raises(DatasetError, match="not valid JSON"):
         load_thresholds(sandbox)
+
+
+def test_a_threshold_that_cannot_fail_is_refused(sandbox: Path) -> None:
+    """`NaN` is the dangerous value: every comparison against it is false.
+
+    JSON carries it as the string "NaN", `float()` accepts it, and `observed <
+    NaN` then never fires — so the metric passes forever however far it
+    regresses, while the report still displays a bar. A threshold that cannot
+    fail is worse than no threshold at all.
+    """
+    thresholds = sandbox / "thresholds.json"
+    payload = json.loads(thresholds.read_text(encoding="utf-8"))
+    payload["thresholds"]["isolation"]["containment"] = "NaN"
+    thresholds.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DatasetError, match="not finite"):
+        load_thresholds(sandbox)
+
+
+def test_a_threshold_outside_the_unit_range_is_refused(sandbox: Path) -> None:
+    """Every metric here is a rate, so a floor of 12 is a typo, not a strict bar."""
+    thresholds = sandbox / "thresholds.json"
+    payload = json.loads(thresholds.read_text(encoding="utf-8"))
+    payload["thresholds"]["isolation"]["containment"] = 12
+    thresholds.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DatasetError, match=r"rate in \[0, 1\]"):
+        load_thresholds(sandbox)
+
+
+def test_a_non_numeric_threshold_is_refused(sandbox: Path) -> None:
+    thresholds = sandbox / "thresholds.json"
+    payload = json.loads(thresholds.read_text(encoding="utf-8"))
+    payload["thresholds"]["isolation"]["containment"] = "high"
+    thresholds.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DatasetError, match="not a number"):
+        load_thresholds(sandbox)
+
+
+def test_a_string_where_a_boolean_belongs_is_refused(sandbox: Path) -> None:
+    """`"answerable": "false"` is valid JSON, truthy in Python, and a silent lie.
+
+    A lenient loader would move the query into the answerable set, and the
+    abstention numbers would then describe a dataset nobody wrote.
+    """
+    queries = sandbox / "datasets" / "queries.json"
+    payload = json.loads(queries.read_text(encoding="utf-8"))
+    payload["queries"][-1]["answerable"] = "false"
+    queries.write_text(json.dumps(payload), encoding="utf-8")
+    refresh_manifest(sandbox)
+
+    with pytest.raises(DatasetError, match="invalid"):
+        load_datasets(sandbox)
+
+
+def test_an_unknown_field_is_refused_rather_than_ignored(sandbox: Path) -> None:
+    """A misspelled key that silently does nothing is a label nobody applied."""
+    queries = sandbox / "datasets" / "queries.json"
+    payload = json.loads(queries.read_text(encoding="utf-8"))
+    payload["queries"][-1]["answerble"] = True
+    queries.write_text(json.dumps(payload), encoding="utf-8")
+    refresh_manifest(sandbox)
+
+    with pytest.raises(DatasetError, match="invalid"):
+        load_datasets(sandbox)
+
+
+def test_unanswerable_queries_cover_all_three_languages() -> None:
+    """Abstention measured only in English stays green while Tamil regresses.
+
+    And each language needs the hard case too — a question whose topic is
+    covered but whose answer is not — because "found nothing, so refused" is the
+    easy half of abstention in any script.
+    """
+    unanswerable = [case for case in DATASETS.queries if not case.answerable]
+    languages = {case.language for case in unanswerable}
+
+    assert {"eng", "tam", "tanglish"} <= languages
+    for language in ("eng", "tam", "tanglish"):
+        related = [case for case in unanswerable if case.language == language and case.relevance]
+        assert related, f"no related-but-insufficient case in {language}"

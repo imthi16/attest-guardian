@@ -218,3 +218,32 @@ def test_cost_accounts_add_and_default_to_free() -> None:
     )
     assert combined.total_tokens == 18
     assert combined.usd == pytest.approx(0.03)
+
+
+def test_mean_reciprocal_rank_accepts_one_shot_iterators() -> None:
+    """The `relevant` side is materialized once, not consumed twice.
+
+    Checking emptiness and then scoring would exhaust a generator, and every
+    query would record `0.0` — a catastrophic MRR produced by the measurement
+    rather than by the ranking, which is the worst kind of wrong number.
+    """
+    rankings = [(["a", "b"], (item for item in ["b"]))]
+
+    assert mean_reciprocal_rank(rankings) == 0.5
+
+
+def test_ndcg_pays_a_repeated_item_only_once() -> None:
+    """Otherwise returning the same chunk twice scores better than returning two.
+
+    The ideal ranking holds each item once, so collecting its gain again on a
+    second appearance can push the ratio above 1.0 — a metric that rewards a
+    retriever for duplicating its best result.
+    """
+    gains = {"a": 2.0}
+
+    repeated = ndcg_at_k(["a", "a"], gains, 2)
+    once = ndcg_at_k(["a"], gains, 2)
+
+    assert repeated == once == 1.0
+    assert repeated is not None
+    assert repeated <= 1.0

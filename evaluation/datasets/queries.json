@@ -127,6 +127,42 @@
       "relevance": { "alpha-training-mention": 1 },
       "expected_quote": null,
       "note": "Related material exists but does not answer the question: the hard abstention case, where retrieval succeeds and the answer must still be withheld"
+    },
+    {
+      "query_id": "q-unanswerable-ta",
+      "text": "விமான டிக்கெட் விலை எவ்வளவு",
+      "language": "tam",
+      "answerable": false,
+      "relevance": {},
+      "expected_quote": null,
+      "note": "Tamil question entirely outside the corpus. Abstention measured only in English would stay green while Tamil normalization or retrieval regressed"
+    },
+    {
+      "query_id": "q-unanswerable-related-ta",
+      "text": "விடுப்பு ரத்து செய்தால் என்ன நடக்கும்",
+      "language": "tam",
+      "answerable": false,
+      "relevance": { "alpha-leave-accrual-tamil": 1 },
+      "expected_quote": null,
+      "note": "Tamil question whose topic is covered but whose answer is not: the hard abstention case in Tamil script"
+    },
+    {
+      "query_id": "q-unanswerable-tanglish",
+      "text": "office la parking spot irukka",
+      "language": "tanglish",
+      "answerable": false,
+      "relevance": {},
+      "expected_quote": null,
+      "note": "Tanglish question outside the corpus; transliteration must not manufacture a match"
+    },
+    {
+      "query_id": "q-unanswerable-related-tanglish",
+      "text": "payment late aana account close pannuvangala",
+      "language": "tanglish",
+      "answerable": false,
+      "relevance": { "alpha-late-penalty": 1 },
+      "expected_quote": null,
+      "note": "Tanglish question about a covered topic with an uncovered answer: the hard abstention case in Latin script"
     }
   ]
 }

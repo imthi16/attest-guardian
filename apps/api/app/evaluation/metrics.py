@@ -59,12 +59,18 @@ def reciprocal_rank(ranked: Sequence[object], relevant: Iterable[object]) -> flo
 def mean_reciprocal_rank(
     rankings: Iterable[tuple[Sequence[object], Iterable[object]]],
 ) -> float | None:
-    """MRR over ``(ranked, relevant)`` pairs, ignoring pairs with no relevant item."""
-    scores = [
-        reciprocal_rank(ranked, relevant)
-        for ranked, relevant in rankings
-        if set(relevant)  # a query with no right answer cannot be scored
-    ]
+    """MRR over ``(ranked, relevant)`` pairs, ignoring pairs with no relevant item.
+
+    Each ``relevant`` iterable is materialized once. Testing it for emptiness and
+    then scoring it would consume a one-shot iterator twice: a caller passing a
+    generator would find every query scored `0.0` — a catastrophic MRR produced
+    by the measurement rather than by the ranking.
+    """
+    scores: list[float] = []
+    for ranked, relevant in rankings:
+        wanted = set(relevant)
+        if wanted:  # a query with no right answer cannot be scored
+            scores.append(reciprocal_rank(ranked, wanted))
     return sum(scores) / len(scores) if scores else None
 
 
@@ -85,6 +91,11 @@ def ndcg_at_k[T](
     zero too, and the ratio would be `0/0`. Negative grades are rejected rather
     than clamped: they make the "ideal" ordering ambiguous, and silently
     dropping them would report a metric nobody asked for.
+
+    A repeated item scores once. The ideal ranking contains each item a single
+    time, so paying its gain again on a second appearance can push the ratio
+    above 1.0 — a retriever that returned the same chunk twice would score
+    better than one that returned it once and something useful after it.
     """
     if k <= 0:
         message = "k must be positive"
@@ -96,7 +107,13 @@ def ndcg_at_k[T](
     ideal_dcg = dcg(ideal)
     if ideal_dcg == 0.0:
         return None
-    actual = [gains.get(item, 0.0) for item in ranked[:k]]
+    # Duplicates keep their slot — the discount for that rank is still spent —
+    # but earn nothing, because the gain was already collected higher up.
+    seen: set[T] = set()
+    actual: list[float] = []
+    for item in ranked[:k]:
+        actual.append(0.0 if item in seen else gains.get(item, 0.0))
+        seen.add(item)
     return dcg(actual) / ideal_dcg
 
 

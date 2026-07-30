@@ -1,7 +1,12 @@
 """Language detection and normalization for Tamil, English, and Tanglish."""
 
 from app.language.detection import detect_language
-from app.language.normalization import normalize_for_match, normalize_text
+from app.language.normalization import (
+    match_tokens,
+    normalize_for_match,
+    normalize_text,
+    tokenize,
+)
 from app.language.processor import QueryProcessor, get_default_query_processor
 from app.language.types import (
     Language,
@@ -18,6 +23,8 @@ __all__ = [
     "ScriptProfile",
     "detect_language",
     "get_default_query_processor",
+    "match_tokens",
     "normalize_for_match",
     "normalize_text",
+    "tokenize",
 ]

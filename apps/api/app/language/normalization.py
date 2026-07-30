@@ -65,3 +65,35 @@ def normalize_text(text: str) -> str:
 def normalize_for_match(text: str) -> str:
     """A case-insensitive key for matching; Tamil is unaffected by casefold."""
     return normalize_text(text).casefold()
+
+
+def tokenize(text: str) -> list[str]:
+    """Split normalized text into words, keeping combining marks attached.
+
+    The obvious regex — ``[^\\W_]+`` — is wrong for every abugida the platform
+    supports. Python's ``\\w`` covers letters and digits but *not* the Unicode
+    mark categories, and a Tamil vowel sign is a spacing combining mark (``Mc``),
+    so ``விமான`` tokenizes as ``வ``, ``ம``, ``ன``: three bare consonants with the
+    vowels dropped. Any two Tamil strings then share most of their "tokens", and
+    a lexical overlap between unrelated passages reads as high similarity.
+
+    So membership is decided per character: alphanumeric, or a mark of any kind
+    (``Mn``/``Mc``/``Me``), which is what keeps a vowel sign bound to the
+    consonant it modifies. Everything else is a separator.
+    """
+    words: list[str] = []
+    current: list[str] = []
+    for char in text:
+        if char.isalnum() or unicodedata.category(char).startswith("M"):
+            current.append(char)
+        elif current:
+            words.append("".join(current))
+            current = []
+    if current:
+        words.append("".join(current))
+    return words
+
+
+def match_tokens(text: str) -> set[str]:
+    """The distinct tokens of `text` under the matching normalization."""
+    return set(tokenize(normalize_for_match(text)))

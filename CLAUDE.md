@@ -211,9 +211,16 @@ Repository layout and intended ownership per directory:
   never `0.0` or `1.0` — otherwise an empty dataset clears a threshold), `harness.py`
   (wires the *real* graph/generator/verifier/policy/resolver to the corpus, substituting
   only the data layer), and `report.py` (`make evaluate`). Suites live in
-  `apps/api/tests/evaluation/`. `docs/EVALUATION.md` records the baseline and the known
-  gaps — notably abstention recall, deliberately left failing on the one hard case rather
-  than tuned away. The injection corpus is *shared*: `apps/api/tests/injection_corpus.py`
+  `apps/api/tests/evaluation/`. `docs/EVALUATION.md` records the baseline, the known
+  gaps (abstention recall, deliberately left failing on the one hard case rather than
+  tuned away), and the two defects the framework found. One is still open: the
+  idiomatic `[^\W_]+` tokenizer in `app/rag/generation.py`, `app/rag/verification.py`,
+  `app/verification/signals.py`, `app/reranking/provider.py`, and
+  `app/embeddings/provider.py` **shatters Tamil words into bare consonants** (`\w`
+  excludes Unicode marks, and a Tamil vowel sign is one), so unrelated Tamil passages
+  score high lexical overlap. Use `app.language.tokenize`/`match_tokens` instead; the
+  harness already does. Switching the embedding provider changes every stored vector, so
+  that migration wants its own PR. The injection corpus is *shared*: `apps/api/tests/injection_corpus.py`
   reads `evaluation/datasets/injection.json` so the detector's own suite and the
   cross-cutting report can never disagree about its recall.
 - `tests/` — cross-cutting `unit`, `integration`, `evaluation` suites,

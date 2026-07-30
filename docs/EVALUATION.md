@@ -42,8 +42,8 @@ reliability, which is not the same as low, and must never be treated as a good r
 
 ## Baseline
 
-Dataset version `2026-07-v1`, thresholds `2026-07-v1`. 16 chunks, 14 queries (11 answerable),
-30 injection samples, 5 isolation probes.
+Dataset version `2026-07-v1`, thresholds `2026-07-v2`. 16 chunks, 18 queries (11 answerable,
+7 unanswerable across all three languages), 30 injection samples, 5 isolation probes.
 
 | Group | Metric | Measured | Floor |
 | --- | --- | --- | --- |
@@ -51,18 +51,22 @@ Dataset version `2026-07-v1`, thresholds `2026-07-v1`. 16 chunks, 14 queries (11
 | retrieval | Recall@3 | 1.00 | 1.00 |
 | retrieval | Recall@5 | 1.00 | 1.00 |
 | retrieval | MRR | 1.00 | 0.90 |
-| retrieval | nDCG@5 | 0.91 | 0.85 |
+| retrieval | nDCG@5 | 0.96 | 0.90 |
 | answers | correctness | 1.00 | 0.90 |
 | answers | faithfulness | 1.00 | 1.00 |
-| citations | precision | 0.67 | 0.60 |
+| citations | precision | 1.00 | 0.90 |
 | citations | recall | 1.00 | 0.90 |
 | citations | resolvable | 1.00 | 1.00 |
 | claims | support rate | 1.00 | 0.80 |
 | abstention | precision | 1.00 | 0.90 |
-| abstention | recall | 0.67 | 0.60 |
+| abstention | recall | 0.86 | 0.80 |
 | injection | recall | 1.00 | 1.00 |
 | injection | precision | 1.00 | 1.00 |
 | isolation | containment | 1.00 | 1.00 |
+
+Retrieval is scored on the retriever's own ranking, before the graph's sufficiency gate and its
+`max_evidence` cap. Reading ranks off the surviving evidence would measure the cap rather than the
+ranking: with `max_evidence` at 4, a Recall@5 computed that way could never inspect a fifth result.
 
 Latency and cost are reported but carry no floor. The mean run is ~11 ms per query on a developer
 machine, which is a regression signal and not a production latency: the retriever is a stand-in and
@@ -105,13 +109,11 @@ contradict each other (thirty days against sixty, ninety against thirty, monthly
 These are recorded rather than tuned away. A dataset written to expose a weakness should not be
 adjusted until the weakness stops showing.
 
-- **Abstention recall is 0.67.** Two of the three unanswerable queries are refused. The third —
+- **Abstention recall is 0.86.** Six of the seven unanswerable queries are refused. The seventh —
   "what is the training budget for the marketing team" — retrieves a passage that mentions training
   budgets without answering the question, and the pipeline answers from it. No score threshold
   fixes this; it needs semantic matching rather than lexical overlap. It is the single most
   valuable number in this report to improve.
-- **Citation precision is 0.67.** The Tamil queries cite three passages where one would do, because
-  the lexical stand-in ranks Tamil chunks together on shared script rather than on meaning.
 - **Retrieval scores are near-ceiling and should be read as a floor, not a forecast.** The corpus is
   small and the queries were written against it, so Recall@1 of 1.00 says the ranking has not
   regressed, not that production retrieval is perfect.
@@ -122,6 +124,37 @@ adjusted until the weakness stops showing.
 - **`min_evidence_score` is 0.35 here**, higher than the production default, because a lexical
   overlap score is on a different scale from a fused semantic one. Below roughly a third, the
   overlap is mostly stop-words. The value is a property of the stand-in, not a recommendation.
+
+## Findings
+
+Building this surfaced two defects in code the framework scores, both fixed here because a
+threshold asserted over a known-broken measurement is not a contract.
+
+**Tamil words were being shattered into bare consonants.** The idiomatic tokenizer `[^\W_]+`
+appears in six modules across generation, verification, reranking, and embeddings. Python's `\w`
+covers letters and digits but *not* the Unicode mark categories, and a Tamil vowel sign is a
+spacing combining mark — so `விமான` tokenizes as `வ`, `ம`, `ன`. Two unrelated Tamil sentences then
+share most of their "tokens": in this corpus, an airfare question and a leave-accrual passage
+scored 0.5 lexical overlap. The evaluation's Tamil numbers were excellent for entirely the wrong
+reason.
+
+`app.language.tokenize` is the corrected primitive — a character belongs to a word if it is
+alphanumeric *or* a Unicode mark, which keeps a vowel sign bound to its consonant. The harness uses
+it. **The six product modules still use the broken regex** and want their own change, because
+switching the embedding provider's tokenizer changes every stored vector and is not something to
+bundle into an evaluation PR. With the harness corrected, Tamil citation precision went from 0.67
+to 1.00 and both Tamil abstention cases began refusing correctly — a measure of how much the
+artefact was flattering the results.
+
+**An OCR reading with no recorded confidence scored as perfectly reliable.**
+`ClaimVerifier._confidence` had three OCR states and two branches: born-digital text and a recorded
+confidence were handled, and *everything else* fell through to `1.0` — including a scanned page
+whose engine reported nothing at all. The comment directly above said a missing value must not be
+treated as perfect. Unknown reliability is strictly less information than a measured score, so it
+now takes `VerificationConfig.unknown_ocr_confidence` (0.5): below a good scan, above a bad one,
+and no longer indistinguishable from text that was read exactly. Deliberately not zero — an engine
+that reports no confidence still produces usable evidence, and pricing it at nothing would withhold
+answers from whole documents.
 
 ## Changing a threshold
 

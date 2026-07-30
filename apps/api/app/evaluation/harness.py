@@ -22,7 +22,6 @@ doubles the pipeline's own work shows up — and not a production latency figure
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 import uuid
 from collections.abc import Sequence
@@ -32,14 +31,12 @@ from app.citations.resolver import CitationResolver
 from app.citations.types import ChunkProvenance, CitationError, CitationReference
 from app.evaluation.datasets import CorpusChunk, EvaluationDatasets, IsolationCase, QueryCase
 from app.evaluation.metrics import CostAccount
-from app.language import normalize_for_match
+from app.language import match_tokens, normalize_for_match
 from app.rag.config import RagConfig
 from app.rag.graph import RagGraph
 from app.rag.state import RagState
 from app.rag.types import AnswerOutcome, EvidencePassage, RagTrace
 from app.safety import assess_text
-
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 
 # Stable synthetic identifiers. A chunk id is derived from its dataset key so a
 # failure names the passage a reader can look up, rather than a random UUID.
@@ -55,7 +52,14 @@ def workspace_uuid(workspace: str) -> uuid.UUID:
 
 
 def tokens(text: str) -> set[str]:
-    return set(_TOKEN.findall(normalize_for_match(text)))
+    """Distinct match tokens, with combining marks kept on their base letter.
+
+    Uses the shared tokenizer rather than a local regex, because the obvious
+    ``[^\\W_]+`` shatters every Tamil word into bare consonants and would make
+    two unrelated Tamil passages look half-identical — a measurement artefact
+    that would show up as excellent Tamil retrieval.
+    """
+    return match_tokens(text)
 
 
 def overlap(query: str, text: str) -> float:
@@ -169,7 +173,15 @@ class QueryOutcome:
     decision: str
     confidence: float
     answer_text: str
+    # What the retriever ranked, before the graph's sufficiency gate and its
+    # `max_evidence` truncation. Scoring Recall@5 against the evidence the graph
+    # kept would measure the *cap*, not the ranking: with `max_evidence=4` the
+    # fifth result can never be inspected, so a relevant chunk at rank 5 would
+    # register as a miss no matter how the ranker improved.
     retrieved_ids: tuple[str, ...]
+    # What survived into generation. Reported separately because the gap between
+    # the two is itself informative — it is how much the gate threw away.
+    evidence_ids: tuple[str, ...]
     cited_ids: tuple[str, ...]
     supported_claims: int
     dropped_claims: int
@@ -249,9 +261,23 @@ async def run_query(
 ) -> QueryOutcome:
     """Run one labelled query end to end and record what happened."""
     settings = config or default_config()
-    graph = build_graph(datasets, workspace, settings)
+    retriever = CorpusRetriever(datasets, workspace)
+    graph = RagGraph(retriever, config=settings)
     resolver = CitationResolver(CorpusProvenanceReader(datasets, workspace))
     by_uuid = {chunk_uuid(chunk.chunk_id): chunk for chunk in datasets.corpus}
+
+    # The retriever's own ranking, asked for separately and at the same `top_k`
+    # the graph will use. Ranking quality is a property of the retriever, and
+    # reading it off the graph's surviving evidence would silently score the
+    # sufficiency gate and `max_evidence` instead. The retriever is
+    # deterministic, so this is the same ranking the graph then receives.
+    ranked, _ = await retriever.retrieve(
+        workspace_id=workspace_uuid(workspace),
+        query=case.text,
+        top_k=settings.top_k,
+        document_id=None,
+        language=None,
+    )
 
     state = RagState(
         workspace_id=workspace_uuid(workspace),
@@ -292,6 +318,9 @@ async def run_query(
         confidence=terminal.trace.confidence or 0.0,
         answer_text=terminal.answer_text,
         retrieved_ids=tuple(
+            by_uuid[passage.chunk_id].chunk_id for passage in ranked if passage.chunk_id in by_uuid
+        ),
+        evidence_ids=tuple(
             by_uuid[passage.chunk_id].chunk_id
             for passage in terminal.evidence
             if passage.chunk_id in by_uuid

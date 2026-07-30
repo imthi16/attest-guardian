@@ -26,9 +26,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 DATASET_FILES = ("corpus.json", "queries.json", "injection.json", "tenant_isolation.json")
 MANIFEST_NAME = "manifest.json"
@@ -36,6 +37,20 @@ MANIFEST_NAME = "manifest.json"
 
 class DatasetError(Exception):
     """A dataset is missing, malformed, or does not match the manifest."""
+
+
+class _Record(BaseModel):
+    """Base for every dataset row: strictly typed and closed to extra keys.
+
+    Strict, because JSON is a weak enough format that a plausible edit changes
+    the meaning of a metric without changing its shape. ``"answerable": "false"``
+    is a valid JSON string and a *truthy* Python value, so a lenient loader would
+    quietly move a query into the answerable set — and the abstention numbers
+    would then describe a dataset nobody wrote. Forbidding unknown keys catches
+    the other half: a misspelled field silently doing nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 def evaluation_root(start: Path | None = None) -> Path:
@@ -52,8 +67,7 @@ def evaluation_root(start: Path | None = None) -> Path:
     raise DatasetError(message)
 
 
-@dataclass(frozen=True)
-class CorpusChunk:
+class CorpusChunk(_Record):
     """One passage of synthetic evidence, with the provenance a citation needs.
 
     ``ocr_engine`` and ``ocr_confidence`` are what make a chunk *scanned*: they
@@ -77,8 +91,7 @@ class CorpusChunk:
         return self.ocr_engine is not None
 
 
-@dataclass(frozen=True)
-class QueryCase:
+class QueryCase(_Record):
     """One labelled question against the corpus.
 
     ``relevance`` maps a chunk id to a graded gain (2 = directly answers,
@@ -103,8 +116,7 @@ class QueryCase:
         return {chunk_id for chunk_id, gain in self.relevance.items() if gain >= 2.0}
 
 
-@dataclass(frozen=True)
-class InjectionCase:
+class InjectionCase(_Record):
     """One labelled prompt-injection sample."""
 
     text: str
@@ -114,8 +126,7 @@ class InjectionCase:
     note: str
 
 
-@dataclass(frozen=True)
-class IsolationCase:
+class IsolationCase(_Record):
     """One cross-tenant probe: a reader asking for another workspace's evidence.
 
     ``leaked`` is never a label here — it is the *outcome* the harness measures.
@@ -130,8 +141,7 @@ class IsolationCase:
     note: str
 
 
-@dataclass(frozen=True)
-class EvaluationDatasets:
+class EvaluationDatasets(BaseModel):
     """Every labelled set, plus the versions they were loaded at.
 
     ``version`` is the manifest's — the version of the collection as a whole.
@@ -139,9 +149,16 @@ class EvaluationDatasets:
     independently: adding injection samples is a change to that contract and to
     nothing else, and forcing one number to cover all four would either
     over-report churn or hide it.
+
+    ``digests`` is the identity a report needs. A version label is a string
+    someone remembered to bump; a digest is what the numbers were actually
+    computed over, and it cannot be forgotten.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     version: str
+    digests: dict[str, str]
     file_versions: dict[str, str]
     corpus: tuple[CorpusChunk, ...]
     queries: tuple[QueryCase, ...]
@@ -197,20 +214,35 @@ def _verify(root: Path, manifest: dict[str, Any]) -> None:
 
 
 def load_datasets(root: Path | None = None) -> EvaluationDatasets:
-    """Read, verify, and parse every evaluation dataset."""
+    """Read, verify, and parse every evaluation dataset.
+
+    A validation failure is re-raised as a :class:`DatasetError` naming the file,
+    because a Pydantic traceback tells a reader what type was wrong but not which
+    of four datasets it came from.
+    """
     base = root or evaluation_root()
     manifest = _read_json(base / MANIFEST_NAME)
     _verify(base, manifest)
     data = {name: _read_json(base / "datasets" / name) for name in DATASET_FILES}
 
-    return EvaluationDatasets(
-        version=str(manifest["version"]),
-        file_versions={name: str(payload["version"]) for name, payload in data.items()},
-        corpus=tuple(CorpusChunk(**entry) for entry in data["corpus.json"]["chunks"]),
-        queries=tuple(QueryCase(**entry) for entry in data["queries.json"]["queries"]),
-        injection=tuple(InjectionCase(**entry) for entry in data["injection.json"]["samples"]),
-        isolation=tuple(IsolationCase(**entry) for entry in data["tenant_isolation.json"]["cases"]),
-    )
+    try:
+        return EvaluationDatasets(
+            version=str(manifest["version"]),
+            digests={name: str(digest) for name, digest in manifest["datasets"].items()},
+            file_versions={name: str(payload["version"]) for name, payload in data.items()},
+            corpus=tuple(CorpusChunk(**entry) for entry in data["corpus.json"]["chunks"]),
+            queries=tuple(QueryCase(**entry) for entry in data["queries.json"]["queries"]),
+            injection=tuple(InjectionCase(**entry) for entry in data["injection.json"]["samples"]),
+            isolation=tuple(
+                IsolationCase(**entry) for entry in data["tenant_isolation.json"]["cases"]
+            ),
+        )
+    except ValidationError as error:
+        message = f"an evaluation dataset record is invalid: {error}"
+        raise DatasetError(message) from error
+    except (KeyError, TypeError) as error:
+        message = f"an evaluation dataset is missing a required key: {error}"
+        raise DatasetError(message) from error
 
 
 def refresh_manifest(root: Path | None = None) -> dict[str, str]:

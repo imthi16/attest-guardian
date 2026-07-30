@@ -16,23 +16,35 @@
     "corpus_chunks": 16,
     "injection_samples": 30,
     "isolation_probes": 5,
-    "queries": 14,
+    "queries": 18,
     "scanned_chunks": 3
+  },
+  "dataset_digests": {
+    "corpus.json": "46ee986fcbb010031400344f7925efeebc421f7cf8b233f6ec405d5cf8291dfe",
+    "injection.json": "7e40ab6b3729c39cecd2cf9d66c7e782cb198a26330809b41b077c471f54a821",
+    "queries.json": "bfbdb630786d0ec72d03ad9442045f3bb0b73984821b2388b8b494b1c578d89f",
+    "tenant_isolation.json": "50536017a66a0b44b62ae20660f10641edf129337454d3173a737efb3b3a12a4"
+  },
+  "dataset_file_versions": {
+    "corpus.json": "2026-07-v1",
+    "injection.json": "2026-07-v2",
+    "queries.json": "2026-07-v1",
+    "tenant_isolation.json": "2026-07-v1"
   },
   "dataset_version": "2026-07-v1",
   "metrics": {
     "abstention": {
-      "accuracy": 0.9285714285714286,
+      "accuracy": 0.9444444444444444,
       "precision": 1.0,
-      "recall": 0.6666666666666666
+      "recall": 0.8571428571428571
     },
     "answers": {
-      "answer_rate": 0.8571428571428571,
+      "answer_rate": 0.6666666666666666,
       "correctness": 1.0,
       "faithfulness": 1.0
     },
     "citations": {
-      "precision": 0.6666666666666666,
+      "precision": 1.0,
       "recall": 1.0,
       "resolvable": 1.0
     },
@@ -48,11 +60,12 @@
     },
     "retrieval": {
       "mrr": 1.0,
-      "ndcg_at_5": 0.9127954667024977,
+      "ndcg_at_5": 0.9563977333512489,
       "recall_at_1": 1.0,
       "recall_at_3": 1.0,
       "recall_at_5": 1.0
     }
   },
-  "threshold_version": "2026-07-v1"
+  "threshold_digest": "f81cf2c66317534556f4d6a224120231fca3443f2057eb82a45f30cf5504663c",
+  "threshold_version": "2026-07-v2"
 }

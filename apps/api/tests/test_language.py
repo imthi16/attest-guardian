@@ -231,3 +231,35 @@ class TestQueryProcessor:
         assert isinstance(result, ProcessedQuery)
         with pytest.raises((AttributeError, TypeError)):
             result.normalized = "tampered"  # type: ignore[misc]
+
+
+def test_tokenize_keeps_tamil_vowel_signs_on_their_consonant() -> None:
+    """The regex every module reached for shatters Tamil into bare consonants.
+
+    Python's `\\w` covers letters and digits but not the Unicode mark categories,
+    and a Tamil vowel sign is a spacing combining mark, so `[^\\W_]+` tokenizes
+    `விமான` as `வ`, `ம`, `ன`. Two unrelated Tamil passages then share most of
+    their "tokens", and lexical overlap between them reads as high similarity.
+    """
+    from app.language import match_tokens, tokenize
+
+    assert tokenize("விமான டிக்கெட் விலை") == ["விமான", "டிக்கெட்", "விலை"]
+    # The failure this prevents: unrelated Tamil sentences sharing nothing.
+    assert not match_tokens("விமான டிக்கெட் விலை") & match_tokens("ஊழியர் விடுப்பு சேர்க்கப்படும்")
+
+
+def test_tokenize_handles_latin_and_mixed_script() -> None:
+    from app.language import tokenize
+
+    assert tokenize("Payment thirty days la pannanum, illena penalty!") == [
+        "Payment",
+        "thirty",
+        "days",
+        "la",
+        "pannanum",
+        "illena",
+        "penalty",
+    ]
+    assert tokenize("ஒப்பந்தம் March 2026") == ["ஒப்பந்தம்", "March", "2026"]
+    assert tokenize("") == []
+    assert tokenize("   ---   ") == []
