@@ -10,6 +10,14 @@ Document lifecycle is split in two: uploading (and retrying a failed
 ingestion, which only reprocesses bytes already accepted) is day-to-day
 member work, while archiving, restoring, and deleting withdraw or destroy
 evidence and are therefore reserved for owners and admins.
+
+Conversations split the same way, and `QUERY` deliberately does not cover
+them. `QUERY` is the read-only right to ask a question and read the answer,
+which is why a viewer holds it; writing a durable thread, recording feedback,
+or deleting answer history are changes to workspace state, so they need
+`CONVERSE` (members and up) and `MANAGE_CONVERSATIONS` (owners and admins) —
+otherwise a "reads only, changes nothing" role could delete another member's
+evidence-backed history.
 """
 
 import enum
@@ -22,6 +30,8 @@ class WorkspaceAction(enum.Enum):
 
     VIEW = "view"
     QUERY = "query"
+    CONVERSE = "converse"
+    MANAGE_CONVERSATIONS = "manage_conversations"
     UPLOAD_DOCUMENTS = "upload_documents"
     MANAGE_DOCUMENTS = "manage_documents"
     MANAGE_MEMBERS = "manage_members"
@@ -31,7 +41,12 @@ _ROLE_ACTIONS: dict[MembershipRole, frozenset[WorkspaceAction]] = {
     MembershipRole.OWNER: frozenset(WorkspaceAction),
     MembershipRole.ADMIN: frozenset(WorkspaceAction),
     MembershipRole.MEMBER: frozenset(
-        {WorkspaceAction.VIEW, WorkspaceAction.QUERY, WorkspaceAction.UPLOAD_DOCUMENTS}
+        {
+            WorkspaceAction.VIEW,
+            WorkspaceAction.QUERY,
+            WorkspaceAction.CONVERSE,
+            WorkspaceAction.UPLOAD_DOCUMENTS,
+        }
     ),
     MembershipRole.VIEWER: frozenset({WorkspaceAction.VIEW, WorkspaceAction.QUERY}),
 }

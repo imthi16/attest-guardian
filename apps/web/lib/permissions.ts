@@ -10,6 +10,8 @@
 import type { MembershipRole } from "./contracts";
 
 export type WorkspaceCapability =
+  | "converse"
+  | "manageConversations"
   | "manageDocuments"
   | "manageMembers"
   | "query"
@@ -20,15 +22,33 @@ export type WorkspaceCapability =
 export const ALL_CAPABILITIES: readonly WorkspaceCapability[] = [
   "view",
   "query",
+  "converse",
+  "manageConversations",
   "uploadDocuments",
   "manageDocuments",
   "manageMembers",
 ];
 
 const ROLE_CAPABILITIES: Record<MembershipRole, readonly WorkspaceCapability[]> = {
-  owner: ["view", "query", "uploadDocuments", "manageDocuments", "manageMembers"],
-  admin: ["view", "query", "uploadDocuments", "manageDocuments", "manageMembers"],
-  member: ["view", "query", "uploadDocuments"],
+  owner: [
+    "view",
+    "query",
+    "converse",
+    "manageConversations",
+    "uploadDocuments",
+    "manageDocuments",
+    "manageMembers",
+  ],
+  admin: [
+    "view",
+    "query",
+    "converse",
+    "manageConversations",
+    "uploadDocuments",
+    "manageDocuments",
+    "manageMembers",
+  ],
+  member: ["view", "query", "converse", "uploadDocuments"],
   viewer: ["view", "query"],
 };
 
@@ -51,7 +71,7 @@ export const ROLE_DESCRIPTIONS: Record<MembershipRole, string> = {
   owner: "Full control, including owners and workspace settings.",
   admin: "Manages members and documents, but not owners.",
   member: "Uploads documents and asks evidence-grounded questions.",
-  viewer: "Reads documents and asks questions; changes nothing.",
+  viewer: "Reads documents and asks questions; saves and changes nothing.",
 };
 
 export const ALL_ROLES: readonly MembershipRole[] = ["owner", "admin", "member", "viewer"];

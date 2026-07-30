@@ -174,6 +174,32 @@ def document_not_retryable() -> HTTPException:
     )
 
 
+def conversation_not_found() -> HTTPException:
+    """A non-member's or another tenant's conversation is simply absent."""
+    return _error(
+        status.HTTP_404_NOT_FOUND,
+        "conversation_not_found",
+        "The conversation does not exist in this workspace.",
+    )
+
+
+def feedback_requires_answer() -> HTTPException:
+    """Feedback is a verdict on an answer, not on the asker's own question."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "feedback_requires_answer",
+        "Feedback can only be recorded for an answer.",
+    )
+
+
+def message_not_found() -> HTTPException:
+    return _error(
+        status.HTTP_404_NOT_FOUND,
+        "message_not_found",
+        "The message does not exist in this conversation.",
+    )
+
+
 def document_permanently_failed() -> HTTPException:
     """A deterministic failure cannot succeed on another run of the same bytes."""
     return _error(

@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.routes.answer import router as answer_router
 from app.routes.auth import router as auth_router
 from app.routes.citations import router as citations_router
+from app.routes.conversations import router as conversations_router
 from app.routes.documents import router as documents_router
 from app.routes.health import router as health_router
 from app.routes.retrieval import router as retrieval_router
@@ -18,3 +19,4 @@ api_v1_router.include_router(documents_router)
 api_v1_router.include_router(retrieval_router)
 api_v1_router.include_router(answer_router)
 api_v1_router.include_router(citations_router)
+api_v1_router.include_router(conversations_router)

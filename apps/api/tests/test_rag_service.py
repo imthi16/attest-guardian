@@ -108,3 +108,117 @@ async def test_service_abstains_and_still_records(monkeypatch) -> None:  # type:
     assert result.answer.outcome is AnswerOutcome.ABSTAINED
     assert result.answer.claims == ()
     assert audits[0].records[0]["detail"]["abstained"] is True  # type: ignore[index]
+
+
+async def test_streaming_reports_real_stages_then_one_final_result(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Stage events come from the graph's own transitions, not from the caller.
+
+    The point of streaming these is that a client showing "retrieving" is seeing
+    that the retrieve node actually finished, so the names must be the graph's
+    node names and the answer must arrive exactly once, at the end.
+    """
+    audits = _install_audit(monkeypatch)
+    evidence = [_passage("The invoice payment is due within thirty days of receipt.", 0)]
+    service = RagService(
+        session=object(),  # type: ignore[arg-type]
+        retriever=FakeRetriever(evidence),
+        config=RagConfig(),
+    )
+
+    stages: list[str] = []
+    finals = []
+    async for stage, result in service.answer_streaming(
+        workspace_id=WORKSPACE,
+        query="invoice payment due date",
+        actor_user_id=ACTOR,
+    ):
+        stages.append(stage)
+        if result is not None:
+            finals.append(result)
+
+    # Every answering stage the pipeline really runs, in order, then the result.
+    assert stages[:6] == ["authorize", "analyze", "retrieve", "generate", "verify", "decide"]
+    assert "compose" in stages
+    assert stages[-1] == "final"
+    # A partial state is never a usable answer, so only the terminal item has one.
+    assert len(finals) == 1
+    assert finals[0].answer.outcome is AnswerOutcome.ANSWERED
+    assert finals[0].answer.claims
+
+    # Streaming must not change what is audited, nor audit twice.
+    assert len(audits[0].records) == 1
+    assert "invoice payment due date" not in str(audits[0].records[0]["detail"])
+
+
+async def test_streaming_matches_the_non_streaming_answer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Same pipeline, same gates: only the reporting differs."""
+    _install_audit(monkeypatch)
+    evidence = [_passage("Termination requires ninety days written notice.", 0)]
+
+    def build() -> RagService:
+        return RagService(
+            session=object(),  # type: ignore[arg-type]
+            retriever=FakeRetriever(evidence),
+            config=RagConfig(),
+        )
+
+    direct = await build().answer(workspace_id=WORKSPACE, query="termination notice period")
+    streamed = [
+        result
+        async for _, result in build().answer_streaming(
+            workspace_id=WORKSPACE, query="termination notice period"
+        )
+        if result is not None
+    ][0]
+
+    assert streamed.answer.outcome is direct.answer.outcome
+    assert streamed.answer.text == direct.answer.text
+    assert streamed.answer.decision == direct.answer.decision
+    assert [claim.text for claim in streamed.answer.claims] == [
+        claim.text for claim in direct.answer.claims
+    ]
+
+
+async def test_streaming_abstention_reaches_the_abstain_node(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """An insufficient-evidence run must stream the gate it actually took."""
+    audits = _install_audit(monkeypatch)
+    service = RagService(
+        session=object(),  # type: ignore[arg-type]
+        retriever=FakeRetriever([]),
+        config=RagConfig(),
+    )
+
+    stages = []
+    final = None
+    async for stage, result in service.answer_streaming(workspace_id=WORKSPACE, query="anything"):
+        stages.append(stage)
+        if result is not None:
+            final = result
+
+    assert "abstain" in stages
+    assert "compose" not in stages
+    assert final is not None
+    assert final.answer.outcome is AnswerOutcome.ABSTAINED
+    assert audits[0].records[0]["detail"]["abstained"] is True  # type: ignore[index]
+
+
+async def test_abandoning_the_stream_records_no_answer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Cancellation must not leave an audit event claiming an answer happened.
+
+    A client that navigates away stops consuming the iterator partway. The audit
+    event is written with the terminal state, so an abandoned run writes nothing.
+    """
+    audits = _install_audit(monkeypatch)
+    evidence = [_passage("The invoice payment is due within thirty days of receipt.", 0)]
+    service = RagService(
+        session=object(),  # type: ignore[arg-type]
+        retriever=FakeRetriever(evidence),
+        config=RagConfig(),
+    )
+
+    stream = service.answer_streaming(workspace_id=WORKSPACE, query="invoice payment due date")
+    first = await anext(stream)
+    await stream.aclose()
+
+    assert first == ("authorize", None)
+    assert audits == [] or all(not repo.records for repo in audits)

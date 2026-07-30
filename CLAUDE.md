@@ -148,6 +148,36 @@ Repository layout and intended ownership per directory:
   exactly (the chunker computes boundaries, never rewrites text) and
   `validate_chunk_provenance` gates persistence — a provenance failure aborts the job.
   Tables are atomic, chunks never span pages, and the section hierarchy carries across pages.
+  Conversations (`app/conversations/`, `app/routes/conversations.py`) persist a
+  thread: the user turn keeps original/normalized/transliterated query text, the
+  assistant turn keeps its whole grounding verdict — `answer_status` **and** the
+  operational `decision`, `decision_reason`, `confidence`, `abstention_reason`
+  (migration `0013`), because three different decisions all read as `abstained`
+  and a thread keeping only the status degrades what the answer said on reload —
+  and each claim writes a `citations` and a `verification_results` row. A
+  persisted citation exposes `document_version_id` (from its chunk, no column
+  needed) because `/citations/resolve` requires it; without it the evidence panel
+  would work on a live answer and be inert on history. The stored `verifier` is
+  `trace.verifier`, never a constant. The question is persisted before the
+  pipeline runs (a failed run still records what was asked); the answer only from
+  a terminal result. Streaming (`POST .../messages/stream`) is SSE over
+  `RagGraph.run_streaming`, which reads LangGraph's own `astream` updates — stage
+  events are real node completions, and the answer is emitted once at the end
+  because extractive generation has no partial text safe to display. Both routes
+  build the identical pipeline, so streaming is never a less-checked path.
+  Reviewer feedback (`message_feedback`, migration `0012`) is unique per
+  (message, reviewer), so it is a `PUT` that revises rather than accumulates —
+  written with `ON CONFLICT DO UPDATE`, and accepted only on assistant turns.
+  `QUERY` is read-only and deliberately does **not** cover conversations:
+  writing a thread, feedback, and deletion need `CONVERSE` (members and up), and
+  deletion also requires authorship or `MANAGE_CONVERSATIONS` (owners/admins) and
+  is audited before the cascade. A turn is atomic — question and answer share the
+  request transaction, so a failed run stores neither. `messages.sequence`
+  (migration `0014`) orders turns, assigned under the conversation's row lock,
+  because a question and its answer tie on `created_at` (`now()` is
+  transaction-start time); that lock also bumps `conversations.updated_at`. A
+  streamed failure logs the exception *type* only — driver errors carry bound
+  parameters including the raw query.
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
   (`--max-warnings=0`). Backend-for-frontend: tokens live only in `httpOnly` cookies and all
   API calls run in server code (`lib/api-client.ts` → `lib/session.ts` → `lib/attest-api.ts`,

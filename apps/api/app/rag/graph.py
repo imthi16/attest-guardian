@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import Protocol, runtime_checkable
 
 from langgraph.graph import END, START, StateGraph
@@ -82,6 +82,32 @@ class RagGraph:
         # LangGraph returns the merged state as a dict-like mapping; re-validate
         # it back into the typed model so callers always get a RagState.
         return RagState.model_validate(dict(result))
+
+    async def run_streaming(
+        self,
+        state: RagState,
+    ) -> AsyncGenerator[tuple[str, RagState | None], None]:
+        """Yield `(node_name, None)` as each node completes, then the final state.
+
+        These are the pipeline's real transitions, taken from LangGraph's own
+        update stream rather than announced around the call, so a client showing
+        "retrieving" is seeing that the retrieve node actually finished. The
+        terminal item carries the validated state; every earlier item carries
+        `None`, because a partial state is not a usable answer and must never be
+        rendered as one.
+
+        The answer text is not streamed token by token: generation is extractive
+        and composes an answer from verified evidence spans, so no partial text
+        exists that is safe to display — a half-composed answer could show a
+        claim whose citation had not yet been checked.
+        """
+        merged: dict[str, object] = {}
+        async for update in self._compiled.astream(state, stream_mode="updates"):
+            for node, delta in update.items():
+                if isinstance(delta, dict):
+                    merged.update(delta)
+                yield node, None
+        yield "final", RagState.model_validate({**state.model_dump(), **merged})
 
     # --- graph construction -------------------------------------------------
 

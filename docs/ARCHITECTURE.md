@@ -110,6 +110,105 @@ provider returning the wrong vector width is a `PermanentIngestionError`,
 because it will do so again on the same input, while every other embedding
 failure is transient and retried like any other stage's.
 
+## Conversations, streaming, and feedback
+
+`app.conversations` makes an answer part of a durable thread. One question writes
+the **user message** — keeping the verbatim original, the normalized form, and
+the Tamil-script transliteration, so a Tanglish question can be re-run later
+without guessing what was meant — the **assistant message** with its grounding
+verdict, and one **citation** plus one **verification result** per claim, so the
+evidence behind an answer stays auditable independently of the response that
+returned it.
+
+The assistant turn keeps the *whole* verdict, not just `answer_status`: the
+operational `decision` (migration `0013`), its human-readable reason, the
+calibrated confidence, and the abstention code. Three different decisions all
+report `answer_status: "abstained"` — no usable evidence, a question that needs
+narrowing, and evidence that contradicts itself — so a thread storing only the
+status could not tell a reader which happened, or that a human had been asked to
+review. `confidence` is `0.0` on every withheld answer, which a client must read
+as an absence rather than a score. All four are null on a user turn, and on rows
+written before `0013`: the decision was never stored then, and inventing one
+would be worse than an honest null.
+
+A persisted citation carries `document_version_id` alongside its `chunk_id`,
+because resolving a citation requires it. Without that, the evidence behind an
+answer would be reachable only while the response that produced it was still on
+screen — the panel would work live and be inert on history. It comes from the
+chunk the citation already points at, so it needed no column; the document's
+title and id come back from resolving, which is also where the surrounding
+provenance lives. The stored `verifier` is the one the trace says actually ran,
+not a constant, since a verdict attributed to the wrong verifier is not audit
+evidence.
+
+A turn is atomic. The question is written before the pipeline runs and the answer
+only from a terminal result, so a completed run stores both and a failed or
+abandoned one stores neither — the request's transaction rolls back together.
+That means a failed question does not linger in the thread; the alternative,
+committing the question separately so it survives, was considered and rejected,
+because a half-turn is harder to reason about than no turn and the separate
+transaction would escape the request's rollback in tests too. An abstention is
+*not* a failure: it is a real answer about the state of the evidence and is
+recorded like any other outcome.
+
+Turn order is a recorded fact, not an inference. `messages.sequence` (migration
+`0014`) is assigned while holding the conversation's row lock, because a question
+and its answer are written in one transaction and PostgreSQL's `now()` is
+transaction-start time — ordering by `created_at` alone would let SQL return the
+answer before the question. The same lock serializes sequence assignment against
+a concurrent turn and is the row whose `updated_at` is bumped, which is what
+makes "most recently updated first" reflect activity rather than creation order.
+
+Two routes ask the same question:
+
+| Route | Shape |
+| --- | --- |
+| `POST .../conversations/{id}/messages` | The finished answer as JSON |
+| `POST .../conversations/{id}/messages/stream` | Server-Sent Events |
+
+Both assemble the identical pipeline through the identical gates, so a client
+cannot obtain a less-checked answer by choosing the streaming route.
+
+Capabilities split reads from writes. `QUERY` is the read-only right to ask a
+question and read the answer, which is why a viewer holds it and why it does
+*not* cover conversations: writing a thread, recording feedback, and deleting
+answer history are changes to workspace state, so they require `CONVERSE`
+(members and up). Deletion additionally requires being the thread's author or
+holding `MANAGE_CONVERSATIONS` (owners and admins), and is audited before the
+cascade — afterwards the audit event is the only remaining record that the
+history existed and who removed it. A viewer keeps the one-shot `/answer`
+endpoint, which persists nothing.
+
+Feedback is written with `ON CONFLICT DO UPDATE` rather than read-then-write, so
+two concurrent first-time submissions cannot both insert and turn one into a 500
+on an endpoint that promises idempotent revision. It is accepted only on
+assistant turns: rating one's own question would create rows the model's
+semantics do not cover and contaminate evaluation data.
+
+A streamed failure logs the exception *type* only. A database or provider error
+commonly carries bound parameters — the user's raw or normalized query, and
+potentially evidence text — so the message and traceback are exactly what must
+not reach the logs. Stage events
+come from LangGraph's own update stream (`RagGraph.run_streaming`), not announced
+around the call, so a client showing "retrieving" is seeing that the retrieve
+node actually finished. The answer arrives in exactly one `answer` event at the
+end: generation is extractive, so no partial text exists that is safe to display,
+and a half-composed answer could show a claim whose citation had not yet been
+verified. A pipeline failure becomes an `error` event rather than a truncated
+connection, because the response status is already `200` once streaming starts.
+Responses carry `Cache-Control: no-store` and `X-Accel-Buffering: no`.
+
+Reviewer feedback (`message_feedback`, migration `0012`) is unique per message
+and reviewer, so `PUT` revises a verdict instead of stacking duplicates — the row
+is that reviewer's current opinion, not a log of their clicks. `INCORRECT` is
+kept distinct from `UNHELPFUL` because the two mean different things for
+evaluation: an unhelpful answer may be correctly abstaining, while an incorrect
+one is a grounding failure.
+
+Deleting a conversation removes its turns and citations but never the evidence:
+`citations.chunk_id` is `ondelete=RESTRICT`, which protects a cited chunk from
+disappearing under an answer rather than making the answer undeletable.
+
 ## Permission-filtered hybrid retrieval
 
 `app.retrieval` answers a workspace query by running two retrievers and fusing
