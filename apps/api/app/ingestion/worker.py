@@ -32,7 +32,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.chunking.chunker import PageInput, chunk_pages
 from app.chunking.provenance import ProvenanceError, validate_chunk_provenance
-from app.db.models.documents import Chunk, Document, DocumentVersion, Page
+from app.db.models.documents import (
+    EMBEDDING_DIMENSIONS,
+    Chunk,
+    Document,
+    DocumentVersion,
+    Page,
+)
 from app.db.models.enums import DocumentStatus, IngestionStage, IngestionStatus
 from app.db.models.operations import IngestionJob
 from app.db.repositories.audit import AuditLogRepository
@@ -468,9 +474,26 @@ class IngestionWorker:
             logger.info("no chunks to embed", extra={"job_id": str(message.job_id)})
             return []
 
+        # The provider can be perfectly self-consistent and still disagree with
+        # the schema: `chunk_embeddings.embedding` is a fixed-width
+        # `Vector(EMBEDDING_DIMENSIONS)` column, so a provider configured to a
+        # different width only fails at INSERT, as an opaque driver error that
+        # looks transient and burns every attempt before dead-lettering. Checking
+        # the declared width here turns a misconfigured `EMBEDDING_DIMENSIONS`
+        # into one clear, permanent failure that names both numbers.
+        if self._embeddings.dimensions != EMBEDDING_DIMENSIONS:
+            msg = (
+                f"embedding provider produces {self._embeddings.dimensions}-dim vectors "
+                f"but chunk_embeddings stores {EMBEDDING_DIMENSIONS}; "
+                "EMBEDDING_DIMENSIONS does not match the schema"
+            )
+            raise PermanentIngestionError(msg)
+
         try:
             result = self._embeddings.embed_texts([row.content for row in rows])
         except DimensionMismatchError as error:
+            # The provider contradicted its own declaration; retrying the same
+            # text cannot change that either.
             raise PermanentIngestionError(f"embedding provider misconfigured: {error}") from error
 
         return [(row.id, vector) for row, vector in zip(rows, result.vectors, strict=True)]

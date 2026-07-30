@@ -702,9 +702,12 @@ async def test_a_wrong_width_provider_fails_permanently(
 ) -> None:
     """A misconfigured provider cannot be fixed by retrying the same bytes.
 
-    Every other embedding failure is transient and worth another attempt, but a
-    provider returning the wrong width will return it again, so the job is
-    dead-lettered immediately instead of burning its attempts.
+    The provider here is internally consistent — it declares 1023 dimensions and
+    returns 1023 — so `EmbeddingService` sees no mismatch. It disagrees with the
+    *schema*, whose `Vector(EMBEDDING_DIMENSIONS)` column would otherwise reject
+    the insert as an opaque driver error that looks transient and burns every
+    attempt before dead-lettering. The width is checked against the schema up
+    front so the operator gets one clear failure naming both numbers.
     """
     seeded = await seed_job(factory, storage)
     await queue.enqueue(seeded.message)
@@ -720,7 +723,10 @@ async def test_a_wrong_width_provider_fails_permanently(
     assert job.status is IngestionStatus.FAILED
     assert job.attempts == 1, "a permanent failure must not consume further attempts"
     assert job.permanent_failure is True
-    assert "misconfigured" in (job.error or "")
+    # The message must name both widths; "insert failed" would leave an operator
+    # guessing at which side is wrong.
+    assert f"{EMBEDDING_DIMENSIONS - 1}-dim" in (job.error or "")
+    assert str(EMBEDDING_DIMENSIONS) in (job.error or "")
     assert document.status is DocumentStatus.FAILED
     assert await queue.list_dead() == [seeded.message]
 
