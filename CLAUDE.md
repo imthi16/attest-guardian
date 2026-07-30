@@ -148,6 +148,18 @@ Repository layout and intended ownership per directory:
   exactly (the chunker computes boundaries, never rewrites text) and
   `validate_chunk_provenance` gates persistence — a provenance failure aborts the job.
   Tables are atomic, chunks never span pages, and the section hierarchy carries across pages.
+  Conversations (`app/conversations/`, `app/routes/conversations.py`) persist a
+  thread: the user turn keeps original/normalized/transliterated query text, the
+  assistant turn keeps its grounding outcome, and each claim writes a `citations`
+  and a `verification_results` row. The question is persisted before the pipeline
+  runs (a failed run still records what was asked); the answer only from a
+  terminal result. Streaming (`POST .../messages/stream`) is SSE over
+  `RagGraph.run_streaming`, which reads LangGraph's own `astream` updates — stage
+  events are real node completions, and the answer is emitted once at the end
+  because extractive generation has no partial text safe to display. Both routes
+  build the identical pipeline, so streaming is never a less-checked path.
+  Reviewer feedback (`message_feedback`, migration `0012`) is unique per
+  (message, reviewer), so it is a `PUT` that revises rather than accumulates.
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
   (`--max-warnings=0`). Backend-for-frontend: tokens live only in `httpOnly` cookies and all
   API calls run in server code (`lib/api-client.ts` → `lib/session.ts` → `lib/attest-api.ts`,

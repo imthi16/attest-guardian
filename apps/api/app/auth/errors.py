@@ -174,6 +174,23 @@ def document_not_retryable() -> HTTPException:
     )
 
 
+def conversation_not_found() -> HTTPException:
+    """A non-member's or another tenant's conversation is simply absent."""
+    return _error(
+        status.HTTP_404_NOT_FOUND,
+        "conversation_not_found",
+        "The conversation does not exist in this workspace.",
+    )
+
+
+def message_not_found() -> HTTPException:
+    return _error(
+        status.HTTP_404_NOT_FOUND,
+        "message_not_found",
+        "The message does not exist in this conversation.",
+    )
+
+
 def document_permanently_failed() -> HTTPException:
     """A deterministic failure cannot succeed on another run of the same bytes."""
     return _error(

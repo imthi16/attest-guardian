@@ -110,6 +110,53 @@ provider returning the wrong vector width is a `PermanentIngestionError`,
 because it will do so again on the same input, while every other embedding
 failure is transient and retried like any other stage's.
 
+## Conversations, streaming, and feedback
+
+`app.conversations` makes an answer part of a durable thread. One question writes
+the **user message** — keeping the verbatim original, the normalized form, and
+the Tamil-script transliteration, so a Tanglish question can be re-run later
+without guessing what was meant — the **assistant message** with its grounding
+outcome, and one **citation** plus one **verification result** per claim, so the
+evidence behind an answer stays auditable independently of the response that
+returned it.
+
+Ordering is deliberate. The question is persisted *before* the pipeline runs and
+is kept even when the run fails: a question that failed is still something
+someone asked, and hiding it would make the thread lie about what happened. The
+answer is persisted only from a terminal result, so a failed or abandoned run
+never leaves an assistant turn implying an answer existed. An abstention is
+recorded like any other outcome — it is a real answer about the state of the
+evidence.
+
+Two routes ask the same question:
+
+| Route | Shape |
+| --- | --- |
+| `POST .../conversations/{id}/messages` | The finished answer as JSON |
+| `POST .../conversations/{id}/messages/stream` | Server-Sent Events |
+
+Both assemble the identical pipeline through the identical gates, so a client
+cannot obtain a less-checked answer by choosing the streaming route. Stage events
+come from LangGraph's own update stream (`RagGraph.run_streaming`), not announced
+around the call, so a client showing "retrieving" is seeing that the retrieve
+node actually finished. The answer arrives in exactly one `answer` event at the
+end: generation is extractive, so no partial text exists that is safe to display,
+and a half-composed answer could show a claim whose citation had not yet been
+verified. A pipeline failure becomes an `error` event rather than a truncated
+connection, because the response status is already `200` once streaming starts.
+Responses carry `Cache-Control: no-store` and `X-Accel-Buffering: no`.
+
+Reviewer feedback (`message_feedback`, migration `0012`) is unique per message
+and reviewer, so `PUT` revises a verdict instead of stacking duplicates — the row
+is that reviewer's current opinion, not a log of their clicks. `INCORRECT` is
+kept distinct from `UNHELPFUL` because the two mean different things for
+evaluation: an unhelpful answer may be correctly abstaining, while an incorrect
+one is a grounding failure.
+
+Deleting a conversation removes its turns and citations but never the evidence:
+`citations.chunk_id` is `ondelete=RESTRICT`, which protects a cited chunk from
+disappearing under an answer rather than making the answer undeletable.
+
 ## Permission-filtered hybrid retrieval
 
 `app.retrieval` answers a workspace query by running two retrievers and fusing

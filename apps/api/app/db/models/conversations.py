@@ -20,7 +20,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceOwnedModel
-from app.db.models.enums import AnswerStatus, ClaimVerdict, MessageRole, pg_enum
+from app.db.models.enums import (
+    AnswerStatus,
+    ClaimVerdict,
+    FeedbackRating,
+    MessageRole,
+    pg_enum,
+)
 
 if TYPE_CHECKING:
     from app.db.models.documents import Chunk
@@ -127,3 +133,30 @@ class VerificationResult(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     verifier: Mapped[str] = mapped_column(String(100))
 
     message: Mapped[Message] = relationship(back_populates="verification_results")
+
+
+class MessageFeedback(WorkspaceOwnedModel):
+    """One reviewer's verdict on one assistant message.
+
+    Unique per message and reviewer, so submitting again revises that person's
+    verdict instead of stacking duplicates — the row is the reviewer's current
+    opinion, not an append-only log of clicks.
+
+    `note` is reviewer-authored free text. It is tenant content like any other:
+    stored verbatim, never interpolated into a prompt, and rendered as text.
+    """
+
+    __tablename__ = "message_feedback"
+    __table_args__ = (UniqueConstraint("message_id", "reviewer_id"),)
+
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        index=True,
+    )
+    reviewer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+    )
+    rating: Mapped[FeedbackRating] = mapped_column(pg_enum(FeedbackRating, "feedback_rating"))
+    note: Mapped[str | None] = mapped_column(Text)
+
+    message: Mapped[Message] = relationship()

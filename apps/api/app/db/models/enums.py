@@ -49,6 +49,20 @@ class AnswerStatus(enum.Enum):
     ABSTAINED = "abstained"
 
 
+class FeedbackRating(enum.Enum):
+    """A reviewer's verdict on one assistant answer.
+
+    Deliberately coarse. `INCORRECT` is kept separate from `UNHELPFUL` because
+    the two mean different things for evaluation: an unhelpful answer may be
+    correctly abstaining, while an incorrect one is a grounding failure worth
+    investigating.
+    """
+
+    HELPFUL = "helpful"
+    UNHELPFUL = "unhelpful"
+    INCORRECT = "incorrect"
+
+
 class ClaimVerdict(enum.Enum):
     """Verification outcome for one atomic claim."""
 

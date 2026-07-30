@@ -13,6 +13,7 @@ EXPECTED_TABLES = {
     "documents",
     "ingestion_jobs",
     "memberships",
+    "message_feedback",
     "messages",
     "pages",
     "refresh_tokens",
@@ -28,6 +29,7 @@ WORKSPACE_OWNED_TABLES = {
     "conversations",
     "documents",
     "ingestion_jobs",
+    "message_feedback",
     # Outlives the document it describes, but still tenant-owned: the sweeper
     # reads across workspaces and row-level security must still fence it.
     "storage_purges",
