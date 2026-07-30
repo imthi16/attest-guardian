@@ -56,7 +56,7 @@ function describeError(status: number, payload: unknown): ApiFailure {
 export type ApiRequest<T> = Readonly<{
   accessToken?: string;
   body?: unknown;
-  method?: "DELETE" | "GET" | "PATCH" | "POST";
+  method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
   path: string;
   schema: z.ZodType<T>;
 }>;
