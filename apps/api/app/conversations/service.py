@@ -217,6 +217,9 @@ def _add_claim_rows(
         Citation(
             message_id=message_id,
             chunk_id=citation.chunk_id,
+            # The same index the verdict row carries, so the two rows stay
+            # joinable after either is read back in an arbitrary order.
+            claim_index=claim.index,
             claim_text=claim.text,
             claim_start=0,
             claim_end=len(claim.text),

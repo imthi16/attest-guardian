@@ -117,6 +117,12 @@ class Citation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "citations"
     __table_args__ = (
+        # One citation per claim, so the claim a citation supports is a recorded
+        # fact rather than a position in an unordered relationship. Without this,
+        # a client pairing claims and citations by list position could put one
+        # claim's passage under another claim whenever the database returned the
+        # rows in a different order.
+        UniqueConstraint("message_id", "claim_index"),
         CheckConstraint("claim_end > claim_start", name="claim_span_positive"),
         CheckConstraint("quote_end > quote_start", name="quote_span_positive"),
     )
@@ -129,6 +135,9 @@ class Citation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("chunks.id", ondelete="RESTRICT"),
         index=True,
     )
+    # The index of the claim this citation supports, matching
+    # `verification_results.claim_index` on the same message.
+    claim_index: Mapped[int] = mapped_column(Integer)
     claim_text: Mapped[str] = mapped_column(Text)
     claim_start: Mapped[int] = mapped_column(Integer)
     claim_end: Mapped[int] = mapped_column(Integer)

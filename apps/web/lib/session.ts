@@ -12,8 +12,8 @@
 import { cookies } from "next/headers";
 import type { z } from "zod";
 
-import { apiRequest, type ApiResult } from "./api-client";
-import { tokenPairSchema } from "./contracts";
+import { apiOrigin, apiRequest, type ApiResult } from "./api-client";
+import { apiErrorDetailSchema, clientErrorCodes, tokenPairSchema } from "./contracts";
 import {
   ACCESS_COOKIE,
   ACTIVE_WORKSPACE_COOKIE,
@@ -144,7 +144,7 @@ function expired(message: string): AuthorizedFailure {
  */
 export async function authorizedRequest<T>(request: {
   body?: unknown;
-  method?: "DELETE" | "GET" | "PATCH" | "POST";
+  method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
   path: string;
   schema: z.ZodType<T>;
 }): Promise<AuthorizedResult<T>> {
@@ -172,4 +172,75 @@ export async function authorizedRequest<T>(request: {
   return result.ok
     ? { ok: true, data: result.data }
     : { ok: false, code: result.code, message: result.message, status: result.status };
+}
+
+/**
+ * Open an authorized streaming call and hand back the raw response.
+ *
+ * Server-Sent Events cannot go through `authorizedRequest`: that parses a
+ * complete JSON body against a schema, which would mean buffering the whole
+ * stream and losing the point of it. This shares the same token handling — one
+ * silent refresh on a 401, then give up — and leaves the body untouched for the
+ * caller to pipe.
+ *
+ * The access token never reaches the browser: the caller is a route handler that
+ * pipes the body onward, so the bearer stays server side exactly as it does for
+ * every other API call.
+ */
+export async function authorizedStream(request: {
+  body: unknown;
+  path: string;
+}): Promise<Readonly<{ ok: true; response: Response }> | AuthorizedFailure> {
+  const session = await readSession();
+  if (session === null) {
+    return expired("Please sign in to continue.");
+  }
+
+  const open = (accessToken: string): Promise<Response> =>
+    fetch(`${apiOrigin()}/api/v1${request.path}`, {
+      body: JSON.stringify(request.body),
+      cache: "no-store",
+      headers: {
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+
+  let response: Response;
+  try {
+    response = await open(session.accessToken);
+    if (response.status === 401) {
+      const accessToken = await rotateTokens(session.refreshToken);
+      if (accessToken === null) {
+        return expired("Your session expired. Please sign in again.");
+      }
+      response = await open(accessToken);
+      if (response.status === 401) {
+        await clearSession();
+        return expired("Your session expired. Please sign in again.");
+      }
+    }
+  } catch {
+    return {
+      ok: false,
+      code: clientErrorCodes.network,
+      message: "The service is unavailable. Please try again shortly.",
+      status: 503,
+    };
+  }
+
+  if (!response.ok) {
+    // The API refused before streaming began, so the body is its ordinary
+    // `{detail: {code, message}}` envelope and is safe to read whole.
+    const detail = apiErrorDetailSchema.safeParse(await response.json().catch(() => null));
+    return {
+      ok: false,
+      code: detail.success ? detail.data.detail.code : `http_${response.status}`,
+      message: detail.success ? detail.data.detail.message : "The request failed.",
+      status: response.status,
+    };
+  }
+  return { ok: true, response };
 }

@@ -40,6 +40,9 @@ export function WorkspaceNav({ role, userEmail, workspaceId, workspaceName }: Wo
           <li>
             <Link href={`${base}/documents`}>Documents</Link>
           </li>
+          <li>
+            <Link href={`${base}/conversations`}>Ask</Link>
+          </li>
           {allows(role, "manageMembers") ? (
             <li>
               <Link href={`${base}/members`}>Members</Link>

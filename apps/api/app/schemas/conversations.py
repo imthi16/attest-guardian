@@ -46,10 +46,16 @@ class CitationRecordResponse(BaseModel):
     come back from resolving the citation, together with the surrounding
     provenance a reader actually needs, and an id with no title is not something
     a client can show.
+
+    `claim_index` is what binds this passage to the statement it supports. Claims
+    are returned sorted by that index while citations come from an unordered
+    relationship, so pairing the two lists by position would eventually file one
+    claim's evidence under a different claim.
     """
 
     chunk_id: uuid.UUID
     document_version_id: uuid.UUID
+    claim_index: int
     claim_text: str
     quote_text: str
     quote_start: int
@@ -108,17 +114,23 @@ class MessageResponse(BaseModel):
             confidence=message.confidence,
             abstention_reason=message.abstention_reason,
             created_at=message.created_at,
+            # Sorted like the claims, so a client reading both lists in order
+            # sees them agree; `claim_index` remains what a client must match on.
             citations=[
                 CitationRecordResponse(
                     chunk_id=citation.chunk_id,
                     document_version_id=citation.chunk.document_version_id,
+                    claim_index=citation.claim_index,
                     claim_text=citation.claim_text,
                     quote_text=citation.quote_text,
                     quote_start=citation.quote_start,
                     quote_end=citation.quote_end,
                     page_number=citation.page_number,
                 )
-                for citation in message.citations
+                for citation in sorted(
+                    message.citations,
+                    key=lambda citation: citation.claim_index,
+                )
             ],
             claims=[
                 ClaimRecordResponse(

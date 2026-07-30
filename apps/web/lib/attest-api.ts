@@ -9,22 +9,33 @@ import { z } from "zod";
 
 import { apiRequest, type ApiResult } from "./api-client";
 import {
+  conversationDetailSchema,
+  conversationListSchema,
+  conversationSchema,
   documentListSchema,
   documentProgressSchema,
   documentSchema,
   downloadLinkSchema,
   memberListSchema,
   memberSchema,
+  messageFeedbackListSchema,
+  messageFeedbackSchema,
+  resolvedCitationSchema,
   tokenPairSchema,
   uploadPolicySchema,
   userSchema,
   workspaceListSchema,
   workspaceWithRoleSchema,
+  type Conversation,
+  type ConversationDetail,
   type Document,
   type DocumentProgress,
   type DownloadLink,
+  type FeedbackRating,
   type Member,
   type MembershipRole,
+  type MessageFeedback,
+  type ResolvedCitation,
   type TokenPair,
   type UploadPolicy,
   type User,
@@ -34,6 +45,12 @@ import { authorizedRequest, type AuthorizedResult } from "./session";
 
 /** 204 responses carry no body; `null` is the only valid payload. */
 const noContentSchema = z.null();
+
+/** Path prefix for one workspace's conversations, with both ids escaped. */
+function conversationsPath(workspaceId: string, conversationId?: string): string {
+  const base = `/workspaces/${encodeURIComponent(workspaceId)}/conversations`;
+  return conversationId === undefined ? base : `${base}/${encodeURIComponent(conversationId)}`;
+}
 
 /** Path prefix for one workspace's documents, with both ids escaped. */
 function documentsPath(workspaceId: string, documentId?: string): string {
@@ -266,5 +283,97 @@ export function deleteDocument(
     method: "DELETE",
     path: documentsPath(workspaceId, documentId),
     schema: noContentSchema,
+  });
+}
+
+export function fetchConversations(workspaceId: string): Promise<AuthorizedResult<Conversation[]>> {
+  return authorizedRequest({
+    path: conversationsPath(workspaceId),
+    schema: conversationListSchema,
+  });
+}
+
+export function createConversation(
+  workspaceId: string,
+  title: string | null,
+): Promise<AuthorizedResult<Conversation>> {
+  return authorizedRequest({
+    body: { title },
+    method: "POST",
+    path: conversationsPath(workspaceId),
+    schema: conversationSchema,
+  });
+}
+
+/** One thread with all of its turns, citations, and claim verdicts. */
+export function fetchConversation(
+  workspaceId: string,
+  conversationId: string,
+): Promise<AuthorizedResult<ConversationDetail>> {
+  return authorizedRequest({
+    path: conversationsPath(workspaceId, conversationId),
+    schema: conversationDetailSchema,
+  });
+}
+
+export function deleteConversation(
+  workspaceId: string,
+  conversationId: string,
+): Promise<AuthorizedResult<null>> {
+  return authorizedRequest({
+    method: "DELETE",
+    path: conversationsPath(workspaceId, conversationId),
+    schema: noContentSchema,
+  });
+}
+
+/**
+ * Prove a citation against stored provenance.
+ *
+ * The evidence panel never renders the quote the answer supplied; it renders
+ * `supporting_text`, which the API reads back from stored content at validated
+ * offsets. A citation that does not match its source fails here instead of
+ * being displayed as if it did.
+ */
+export function resolveCitation(
+  workspaceId: string,
+  citation: {
+    chunk_id: string;
+    document_version_id: string;
+    quote: string;
+    quote_char_start: number;
+    quote_char_end: number;
+  },
+): Promise<AuthorizedResult<ResolvedCitation>> {
+  return authorizedRequest({
+    body: citation,
+    method: "POST",
+    path: `/workspaces/${encodeURIComponent(workspaceId)}/citations/resolve`,
+    schema: resolvedCitationSchema,
+  });
+}
+
+export function submitFeedback(
+  workspaceId: string,
+  conversationId: string,
+  messageId: string,
+  body: { note: string | null; rating: FeedbackRating },
+): Promise<AuthorizedResult<MessageFeedback>> {
+  return authorizedRequest({
+    body,
+    method: "PUT",
+    path: `${conversationsPath(workspaceId, conversationId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+    schema: messageFeedbackSchema,
+  });
+}
+
+export function fetchFeedback(
+  workspaceId: string,
+  conversationId: string,
+  messageId: string,
+): Promise<AuthorizedResult<MessageFeedback[]>> {
+  return authorizedRequest({
+    path: `${conversationsPath(workspaceId, conversationId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+    schema: messageFeedbackListSchema,
   });
 }
