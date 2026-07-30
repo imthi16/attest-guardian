@@ -82,6 +82,7 @@ const ready: Document = {
   status: "ready",
   created_at: "2026-07-01T09:00:00Z",
   archived_at: null,
+  retryable: false,
 };
 
 const renderPage = async (
@@ -127,9 +128,12 @@ describe("DocumentsPage", () => {
     expect(screen.getByText(/\.pdf up to 100 MB/)).toBeInTheDocument();
   });
 
-  it("still offers upload with default limits when the policy cannot be read", async () => {
+  it("still offers upload when the policy cannot be read, without enforcing a guess", async () => {
     // The API remains the enforcement point, so a policy read that fails must
-    // degrade to the documented defaults rather than block uploading entirely.
+    // degrade rather than block uploading entirely — but it must not turn the
+    // compiled-in default into a local limit either. On a deployment that raised
+    // MAX_UPLOAD_BYTES that would refuse files the API accepts, so the hint says
+    // "usually" and the size check is skipped until a real limit is known.
     mockedPolicy.mockResolvedValue({
       ok: false,
       code: "api_unreachable",
@@ -140,7 +144,7 @@ describe("DocumentsPage", () => {
     await renderPage("member");
 
     expect(screen.getByRole("button", { name: "Upload document" })).toBeInTheDocument();
-    expect(screen.getByText(/up to 25 MB/)).toBeInTheDocument();
+    expect(screen.getByText(/usually up to 25 MB/)).toBeInTheDocument();
   });
 
   it("explains to a viewer why there is no upload control", async () => {

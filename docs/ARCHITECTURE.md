@@ -283,7 +283,7 @@ stateDiagram-v2
   failed --> pending: retry (POST /retry)
   ready --> archived: archive (POST /archive)
   archived --> ready: restore (POST /restore)
-  archived --> [*]: delete (DELETE, purges bytes)
+  archived --> [*]: delete (DELETE, bytes purged asynchronously)
   quarantined --> [*]: delete (never retried)
 ```
 
@@ -336,13 +336,22 @@ enumerates the Python action enum, so a capability added to the API without a mi
   message whose row has gone, and refusing there would make a document undeletable whenever its
   queue is backed up. Because the check and the cascade are not atomic, the worker also treats a
   vanished job as abandoned rather than asserting on it.
-- **Delete purges every stored object, not just the upload.** With `INGESTION_STORE_PAGE_IMAGES` on,
-  ingestion writes a rendered PNG per page and records the key on the `pages` row. The cascade
-  destroys the only record of those keys, so they are collected before the rows are removed.
-- Rows are deleted before the stored objects, so a storage failure rolls the request back rather
-  than leaving a downloadable document whose bytes are gone. The reverse window — a commit failure
-  after a successful purge — is smaller but not closed; doing so needs a committed deletion marker
-  and an idempotent background purge, tracked as follow-up.
+- **Delete purges by prefix, not by row.** Every object a document produces lives under one
+  server-generated prefix (`apps/api/app/documents/keys.py`): each version's uploaded bytes and,
+  with `INGESTION_STORE_PAGE_IMAGES` on, a rendered PNG per page. Purging the prefix rather than
+  replaying the rows matters because a page image is written to storage *before* its `pages` row is
+  committed — a run that crashed mid-OCR leaves content the database never recorded, and a
+  row-driven purge would leave pictures of the document's pages readable forever. The keys the rows
+  did know are recorded too, so the uploaded bytes are still removed if a listing call fails.
+- **Delete performs no storage call.** Rows and objects cannot be deleted in one transaction, and
+  either ordering strands something on failure: a document that still issues download links for
+  bytes that are gone, or bytes that outlive their document. So the request commits the row deletion
+  together with a durable `storage_purges` record (migration `0011`) and stops there. The sweeper in
+  `apps/api/app/documents/purge.py` — run by the ingestion worker whenever it is idle — deletes the
+  objects and marks the record complete, retrying until it succeeds. The purge is idempotent by
+  construction, since deleting an absent key is a no-op, so an interrupted record is always safe to
+  re-run. Like `requeue_stale`, the sweeper scans across workspaces and therefore needs the
+  worker's `BYPASSRLS` role; without it purge records stay pending and bytes are retained.
 
 ### Upload and download paths
 

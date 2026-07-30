@@ -157,24 +157,40 @@ Security-relevant properties:
   contributing to answers immediately.
 - **Deletion is two-step and audited.** The audit row is written before the document row is deleted
   and survives it, because audit rows reference resources by id rather than by foreign key.
-- **Deletion purges rendered page images too.** When `INGESTION_STORE_PAGE_IMAGES` is on, ingestion
-  writes a PNG per page — pictures of the document's content. The cascade destroys the only record
-  of those keys, so they are collected before the rows are removed; otherwise a "permanent" deletion
-  would leave the document's pages readable in object storage indefinitely.
+- **Deletion purges the document's whole key prefix.** When `INGESTION_STORE_PAGE_IMAGES` is on,
+  ingestion writes a PNG per page — pictures of the document's content — and writes each one to
+  storage *before* the `pages` row that records it is committed. A purge driven by those rows would
+  therefore miss every image from a run that crashed mid-OCR, so the purge sweeps the document's
+  server-generated prefix instead and treats the recorded keys as a fallback. Without that, a
+  "permanent" deletion could leave the document's pages readable in object storage indefinitely.
+- **Deletion is durable before it is complete.** Rows and objects cannot be deleted in one
+  transaction, so the request never calls storage: it commits the row deletion with a
+  `storage_purges` record, and a sweeper deletes the objects afterwards and retries until it
+  succeeds. A crash or a storage outage therefore delays the purge rather than losing the
+  instruction — and never leaves a surviving document whose bytes are already gone. Retention
+  monitoring should alert on purge records that stay pending, since that is what a worker without
+  `BYPASSRLS`, or a persistent storage failure, looks like.
 - **Deletion cannot destabilise a worker.** It is refused while a job is `RUNNING`, because the
   cascade would remove the row a worker is still writing stages to. That check and the cascade are
   not atomic, so the worker also treats a vanished job as an abandoned one rather than asserting —
   losing one document can never stop the ingestion process.
-- **State transitions are serialized.** Retry and delete read the document `FOR UPDATE`. The
-  worker's claim is a compare-and-set on a single job id, so it makes duplicate *delivery* safe but
-  does not deduplicate two distinct jobs; without the row lock, two concurrent retries would each
-  enqueue one and two workers would race over the same pages and chunks.
+- **State transitions are serialized, in one lock order.** Retry and delete read the document
+  `FOR UPDATE`. The worker's claim is a compare-and-set on a single job id, so it makes duplicate
+  *delivery* safe but does not deduplicate two distinct jobs; without the row lock, two concurrent
+  retries would each enqueue one and two workers would race over the same pages and chunks. Every
+  path that writes both a document and its job takes the *document* lock first — the worker included
+  — because the reverse order would deadlock against a delete, and PostgreSQL would abort one of the
+  two: the worker at a point where it can record nothing, or the request as a 500. Holding the
+  document lock is also what makes delete's "is a job running?" check meaningful, since no claim can
+  start behind it.
 - **Deterministic failures are not retryable.** A hash mismatch, an unparseable file, or a
   provenance violation is recorded as `permanent_failure`, so a caller cannot queue unbounded runs
   that are certain to fail identically on the same bytes.
-- **`retryable` is scoped to the caller.** The status endpoint reports whether *this* caller may
-  retry — state, permanence, and their own role — so it never advertises an action the same caller
-  would be refused.
+- **`retryable` is scoped to the caller, and is the only source of the control.** One predicate
+  (`may_retry`) answers whether *this* caller may retry — state, permanence, and their own role — and
+  it is reported on the document itself as well as on the status endpoint. The UI renders "Process
+  again" from that field rather than from `status == "failed"`, so a permanently failed document
+  never presents an action that can only return 409.
 - **Non-members still learn nothing.** Every lifecycle route answers `workspace_not_found` for a
   non-member and `document_not_found` for another tenant's document id.
 
@@ -201,7 +217,11 @@ The upload relay carries two protections a server action would have provided for
 
 Both the relay and the browser take the size cap from `GET .../documents/policy` rather than a
 compiled-in constant, so raising or lowering `MAX_UPLOAD_BYTES` in a deployment cannot leave the web
-tier rejecting files the API accepts or advertising ones it will refuse.
+tier rejecting files the API accepts or advertising ones it will refuse. The two handle an
+*unavailable* policy differently, on purpose: the relay must bound the body it buffers, so it refuses
+the upload outright, while the browser treats an unknown cap as unknown and skips its local size
+check rather than enforcing the compiled-in default — which on a deployment that raised the cap would
+refuse a perfectly valid file because one request happened to fail.
 
 Presigned download URLs are minted per click, carry `Cache-Control: no-store`, and are never
 rendered into HTML, so they cannot be scraped from a page or survive in a cache.

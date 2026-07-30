@@ -18,7 +18,7 @@ import { useRouter } from "next/navigation";
 
 import { Feedback } from "./feedback";
 import { apiErrorDetailSchema, clientErrorCodes, documentSchema } from "../lib/contracts";
-import { formatBytes, rejectionFor } from "../lib/upload-rules";
+import { DEFAULT_MAX_UPLOAD_BYTES, formatBytes, rejectionFor } from "../lib/upload-rules";
 
 type UploadState =
   | Readonly<{ kind: "done"; filename: string }>
@@ -29,8 +29,14 @@ type UploadState =
 type DocumentUploadProps = Readonly<{
   /** Extensions this deployment accepts, served by the API's upload policy. */
   acceptedExtensions: readonly string[];
-  /** The deployment's effective size cap, served by the API's upload policy. */
-  maxUploadBytes: number;
+  /**
+   * The deployment's effective size cap from the API's upload policy, or `null`
+   * when that request failed. `null` means unknown, not "assume the default":
+   * this component then sends the file and lets the API decide, because a
+   * deployment with a raised cap must not have valid uploads refused here
+   * because a policy request happened to fail.
+   */
+  maxUploadBytes: number | null;
   workspaceId: string;
 }>;
 
@@ -147,8 +153,11 @@ export function DocumentUpload({
       <p className="field">
         <label htmlFor="document-file">Document</label>
         <span className="field-hint" id="document-file-hint">
-          {acceptedExtensions.join(", ")} up to {formatBytes(maxUploadBytes)}. Uploads are scanned
-          and validated before anything is stored.
+          {acceptedExtensions.join(", ")}
+          {maxUploadBytes === null
+            ? `, usually up to ${formatBytes(DEFAULT_MAX_UPLOAD_BYTES)}`
+            : ` up to ${formatBytes(maxUploadBytes)}`}
+          . Uploads are scanned and validated before anything is stored.
         </span>
         {/* Deliberately not `required`: the native validation bubble would
             compete with the announced, code-carrying message this form shows

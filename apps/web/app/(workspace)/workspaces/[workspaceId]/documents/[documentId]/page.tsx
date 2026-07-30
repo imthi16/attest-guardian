@@ -132,10 +132,7 @@ export default async function DocumentDetailPage({ params }: DocumentPageProps) 
         <section aria-labelledby="controls-title" className="workspace-document-controls">
           <h2 id="controls-title">Actions</h2>
           <DocumentControls
-            capabilities={{
-              canManage: allows(role, "manageDocuments"),
-              canUpload: allows(role, "uploadDocuments"),
-            }}
+            capabilities={{ canManage: allows(role, "manageDocuments") }}
             entry={document.data}
             workspaceId={workspace.data.id}
           />

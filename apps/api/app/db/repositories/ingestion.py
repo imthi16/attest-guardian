@@ -6,7 +6,7 @@ and manages its own sessions; see `app.ingestion.worker`.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.models.enums import IngestionStatus
 from app.db.models.operations import IngestionJob
@@ -36,6 +36,35 @@ class IngestionJobRepository(WorkspaceScopedRepository[IngestionJob]):
             .limit(1)
         )
         return await self._session.scalar(statement) is not None
+
+    async def permanently_failed_document_ids(self) -> set[uuid.UUID]:
+        """Documents whose *most recent* run failed deterministically.
+
+        One query rather than a lookup per row: the list endpoint reports
+        retryability for every document it returns, and only the latest run
+        decides it — an earlier permanent failure followed by a transient one
+        must not make the document look doomed.
+        """
+        ranked = (
+            select(
+                IngestionJob.document_id.label("document_id"),
+                IngestionJob.permanent_failure.label("permanent_failure"),
+                func.row_number()
+                .over(
+                    partition_by=IngestionJob.document_id,
+                    order_by=IngestionJob.created_at.desc(),
+                )
+                .label("recency"),
+            )
+            .where(IngestionJob.workspace_id == self.workspace_id)
+            .subquery()
+        )
+        statement = select(ranked.c.document_id).where(
+            ranked.c.recency == 1,
+            ranked.c.permanent_failure.is_(True),
+        )
+        result = await self._session.scalars(statement)
+        return set(result.all())
 
     async def get_latest_for_document(self, document_id: uuid.UUID) -> IngestionJob | None:
         statement = (

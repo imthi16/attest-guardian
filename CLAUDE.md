@@ -112,12 +112,18 @@ Repository layout and intended ownership per directory:
   quarantine is terminal and is never reprocessed, and neither is a job flagged
   `permanent_failure` (deterministic failures would fail identically on the same bytes);
   permanent delete is refused unless the document is already archived *and* no job is
-  `RUNNING`, and it purges rendered page images (`pages.image_storage_key`) alongside the
-  uploaded bytes — the cascade destroys the only record of those keys. Retry and delete read
-  the document `FOR UPDATE`: the worker's compare-and-set claim dedupes duplicate delivery of
-  one job, not two distinct jobs. Terminal worker handlers must never `assert` the job row
-  exists — raising from an exception handler escapes `run_forever` and stops the worker.
-  Evidence eligibility is one predicate,
+  `RUNNING`. Delete makes **no storage call**: rows and objects cannot share a transaction,
+  so it commits a `storage_purges` record (`app/documents/purge.py`, migration `0011`) with
+  the row deletion, and the worker's idle loop (`purge_deleted_content` → `run_pending_purges`)
+  deletes the objects afterwards and retries — a storage outage delays the purge instead of
+  stranding a document whose bytes are gone. The purge sweeps the document's **key prefix**,
+  not the keys the deleted rows knew: a page image reaches storage before its `pages` row
+  commits, so a run that crashed mid-OCR leaves content no row recorded. Every writer of
+  document content must build keys via `app/documents/keys.py` to stay inside that prefix.
+  Retry and delete read the document `FOR UPDATE`: the worker's compare-and-set claim dedupes
+  duplicate delivery of one job, not two distinct jobs. Terminal worker handlers must never
+  `assert` the job row exists — raising from an exception handler escapes `run_forever` and
+  stops the worker. Evidence eligibility is one predicate,
   `evidence_eligible()` in `app/db/models/documents.py` (READY **and** not archived), and
   every retrieval gate must use it — lexical, dense, hydration, and citation provenance —
   so archiving stops answers rather than only hiding list rows. Storage integration tests

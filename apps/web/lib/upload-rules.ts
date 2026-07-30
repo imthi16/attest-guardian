@@ -15,11 +15,12 @@ export const ACCEPT_ATTRIBUTE = ACCEPTED_EXTENSIONS.join(",");
 /**
  * The API's *default* `Settings.max_upload_bytes` (25 MiB).
  *
- * Only a fallback for rendering before the deployment's real limit is known —
- * `max_upload_bytes` is per-environment configuration, so anything that
- * actually accepts or rejects a file must use the limit served by
- * `GET /workspaces/{id}/documents/policy` instead of this constant. The parity
- * test pins it to the Python default so the fallback cannot drift either.
+ * For explaining the likely limit in hint text before the deployment's real one
+ * is known — never for accepting or rejecting a file. `max_upload_bytes` is
+ * per-environment configuration, so anything that decides an upload must use
+ * the limit served by `GET /workspaces/{id}/documents/policy`; enforcing this
+ * constant would refuse files a raised cap allows. The parity test pins it to
+ * the Python default so even the hint cannot drift.
  */
 export const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -55,14 +56,14 @@ function extensionOf(filename: string): string {
  * Returns `null` when nothing local rules out the upload. The codes match the
  * API's so a rejection reads the same wherever it was decided.
  *
- * `maxUploadBytes` comes from the deployment's upload policy; it falls back to
- * the API default only so a caller without the policy yet still gets a sane
- * message rather than no check at all.
+ * `maxUploadBytes` is the deployment's real cap, from its upload policy. Pass
+ * `null` when the policy could not be loaded: the size check is then skipped
+ * rather than falling back to the default, because a deployment that raised the
+ * cap would otherwise have valid files refused here on the strength of a
+ * transient failure. Skipping is safe — the API still enforces the real limit
+ * and the relay still bounds the body it buffers.
  */
-export function rejectionFor(
-  file: File,
-  maxUploadBytes: number = DEFAULT_MAX_UPLOAD_BYTES,
-): UploadRejection | null {
+export function rejectionFor(file: File, maxUploadBytes: number | null): UploadRejection | null {
   if (file.name.length > MAX_FILENAME_LENGTH) {
     return { code: "invalid_filename", message: "The filename is too long." };
   }
@@ -77,7 +78,7 @@ export function rejectionFor(
   if (file.size === 0) {
     return { code: "empty_file", message: "The file is empty." };
   }
-  if (file.size > maxUploadBytes) {
+  if (maxUploadBytes !== null && file.size > maxUploadBytes) {
     return {
       code: "file_too_large",
       message: `The file exceeds the ${formatBytes(maxUploadBytes)} upload limit.`,

@@ -6,7 +6,7 @@ committed database (plus real Redis and MinIO from `make infra-up`).
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -191,6 +191,9 @@ class FlakyStorage:
 
     async def delete_object(self, key: str) -> None:
         await self._inner.delete_object(key)
+
+    async def list_keys(self, prefix: str) -> Sequence[str]:
+        return await self._inner.list_keys(prefix)
 
     async def presigned_get_url(self, key: str, expires_in_seconds: int) -> str:
         return await self._inner.presigned_get_url(key, expires_in_seconds)
@@ -503,6 +506,9 @@ class VanishingJobStorage:
 
     async def delete_object(self, key: str) -> None:
         await self._inner.delete_object(key)
+
+    async def list_keys(self, prefix: str) -> Sequence[str]:
+        return await self._inner.list_keys(prefix)
 
     async def presigned_get_url(self, key: str, expires_in_seconds: int) -> str:
         return await self._inner.presigned_get_url(key, expires_in_seconds)

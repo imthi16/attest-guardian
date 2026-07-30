@@ -15,6 +15,7 @@ from app.db.models.documents import Document, DocumentVersion
 from app.db.models.operations import IngestionJob
 from app.db.repositories.audit import AuditLogRepository
 from app.db.repositories.documents import DocumentRepository, DocumentVersionRepository
+from app.documents.keys import version_key
 from app.documents.validation import UploadRejectedError, validate_upload
 from app.ingestion.queue import JobMessage, JobQueue
 from app.storage.base import ObjectStorage
@@ -108,7 +109,7 @@ async def store_new_document(
             sha256=sha256,
         )
     )
-    storage_key = f"workspaces/{workspace_id}/documents/{document.id}/v1-{sha256[:16]}"
+    storage_key = version_key(workspace_id, document.id, version_number=1, sha256=sha256)
     await DocumentVersionRepository(session).add(
         DocumentVersion(
             document_id=document.id,

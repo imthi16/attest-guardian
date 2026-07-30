@@ -450,6 +450,23 @@ async def test_retry_only_reprocesses_a_failed_document(
         assert error_code(missing) == "document_not_found"
 
 
+async def run_pending_purge(
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> bool:
+    """Run the sweeper's work on this session's uncommitted purge record.
+
+    The sweeper itself opens its own sessions, which cannot see a rolled-back
+    test transaction, so the test drives `purge_one` directly on the same
+    session. `test_ingestion_worker.py` covers the committed loop.
+    """
+    purge = await StoragePurgeRepository(db_session).claim_pending()
+    assert purge is not None, "permanent deletion must leave a purge record"
+    completed = await purge_one(session=db_session, storage=object_storage, purge=purge)
+    await db_session.flush()
+    return completed
+
+
 async def test_delete_requires_archive_and_purges_content(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -479,8 +496,17 @@ async def test_delete_requires_archive_and_purges_content(
     gone = await client.get(f"{base}/{document_id}", headers=owner.headers)
     assert gone.status_code == 404
     assert await db_session.get(Document, uuid.UUID(document_id)) is None
+
+    # The request itself makes no storage call: the bytes go when the committed
+    # purge record is swept, so a storage failure can never strand a surviving
+    # document whose content is already gone.
+    assert await object_storage.get_object(storage_key) == PDF_BYTES
+    assert await run_pending_purge(db_session, object_storage)
     with pytest.raises(ClientError, match="NoSuchKey"):
         await object_storage.get_object(storage_key)
+
+    # Nothing is left to sweep, and re-running is harmless either way.
+    assert await StoragePurgeRepository(db_session).claim_pending() is None
 
     # The audit trail outlives the document it describes.
     logged = (
@@ -493,6 +519,7 @@ async def test_delete_requires_archive_and_purges_content(
     ).all()
     assert len(logged) == 1
     assert logged[0].detail["version_count"] == 1
+    assert logged[0].detail["purge_prefix"].endswith(f"documents/{document_id}/")
 
 
 async def test_lifecycle_authorization_matrix(client: httpx.AsyncClient) -> None:

@@ -2,10 +2,14 @@
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
 from app.db.models.enums import DocumentStatus, IngestionStage, IngestionStatus
+
+if TYPE_CHECKING:
+    from app.db.models.documents import Document
 
 
 class DocumentResponse(BaseModel):
@@ -20,6 +24,22 @@ class DocumentResponse(BaseModel):
     status: DocumentStatus
     created_at: datetime
     archived_at: datetime | None
+    # Whether *this* caller may ask for another ingestion run right now (see
+    # `app.documents.lifecycle.may_retry`). Carried on the document itself, not
+    # only on the progress endpoint, so a list can render the control without a
+    # per-row request — and so it is never rendered from status alone, which
+    # would offer a retry for a deterministic failure the endpoint refuses.
+    #
+    # The default is the safe answer: a route that does not compute it offers no
+    # retry rather than promising one.
+    retryable: bool = False
+
+    @classmethod
+    def of(cls, document: "Document", *, retryable: bool) -> "DocumentResponse":
+        """Build the response for one document with its retry verdict attached."""
+        response = cls.model_validate(document)
+        response.retryable = retryable
+        return response
 
 
 class DownloadLinkResponse(BaseModel):

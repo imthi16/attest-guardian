@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { DocumentUpload } from "./document-upload";
@@ -80,6 +80,7 @@ function acceptedDocument(): string {
     status: "pending",
     created_at: "2026-07-29T10:00:00Z",
     archived_at: null,
+    retryable: false,
   });
 }
 
@@ -230,6 +231,26 @@ describe("DocumentUpload", () => {
     await choose(pdf(`${"n".repeat(300)}.pdf`));
     expect(await screen.findByText("The filename is too long.")).toBeInTheDocument();
     expect(FakeXhr.last).toBeNull();
+  });
+
+  it("sends an oversized file when the deployment's cap is unknown", async () => {
+    // The policy request failed, so the real cap is unknown. Enforcing the
+    // compiled-in default here would refuse a file that a deployment with a
+    // raised cap accepts, on the strength of a transient failure — so the file
+    // goes to the API, which is the enforcement point either way.
+    cleanup();
+    render(
+      <DocumentUpload
+        acceptedExtensions={[...ACCEPTED_EXTENSIONS]}
+        maxUploadBytes={null}
+        workspaceId={WORKSPACE_ID}
+      />,
+    );
+
+    await choose(pdf("huge.pdf", DEFAULT_MAX_UPLOAD_BYTES + 1));
+
+    expect(FakeXhr.last).not.toBeNull();
+    expect(screen.queryByText(/upload limit/)).not.toBeInTheDocument();
   });
 
   it("asks for a file when none was chosen", async () => {

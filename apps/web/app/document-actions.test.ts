@@ -53,6 +53,7 @@ const document: Document = {
   status: "ready",
   created_at: "2026-07-01T09:00:00Z",
   archived_at: null,
+  retryable: false,
 };
 
 const progress: DocumentProgress = {

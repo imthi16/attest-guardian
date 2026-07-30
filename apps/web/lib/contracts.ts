@@ -88,6 +88,14 @@ export const documentSchema = z.object({
   status: documentStatusSchema,
   created_at: z.string(),
   archived_at: z.string().nullable(),
+  /**
+   * Whether *this* caller may ask for another ingestion run, decided by the API
+   * from the document's state, the permanence of its last failure, and the
+   * caller's role. Controls read this instead of inferring a retry from
+   * `status === "failed"`: a deterministic failure — a hash mismatch, an
+   * unparseable file — is refused with a 409 however many times it is asked for.
+   */
+  retryable: z.boolean(),
 });
 export type Document = z.infer<typeof documentSchema>;
 

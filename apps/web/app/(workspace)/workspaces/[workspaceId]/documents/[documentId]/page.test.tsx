@@ -73,6 +73,7 @@ const document: Document = {
   status: "ready",
   created_at: "2026-07-01T09:00:00Z",
   archived_at: null,
+  retryable: false,
 };
 
 const progress: DocumentProgress = {
@@ -146,8 +147,11 @@ describe("DocumentDetailPage", () => {
     expect(screen.queryByRole("button", { name: "Process again" })).not.toBeInTheDocument();
   });
 
-  it("offers reprocessing for a failed document", async () => {
-    mockedDocument.mockResolvedValue({ ok: true, data: { ...document, status: "failed" } });
+  it("offers reprocessing when the API says this caller may retry", async () => {
+    mockedDocument.mockResolvedValue({
+      ok: true,
+      data: { ...document, retryable: true, status: "failed" },
+    });
     mockedProgress.mockResolvedValue({
       ok: true,
       data: { ...progress, status: "failed", job_status: "failed", retryable: true },
@@ -156,6 +160,25 @@ describe("DocumentDetailPage", () => {
     await renderPage("member");
 
     expect(screen.getByRole("button", { name: "Process again" })).toBeInTheDocument();
+  });
+
+  it("hides reprocessing for a failure the API will refuse to retry", async () => {
+    // A deterministic failure — a hash mismatch, an unparseable file — reports
+    // `retryable: false` however many times it is asked for, so the page must
+    // not offer a control that can only return 409.
+    mockedDocument.mockResolvedValue({
+      ok: true,
+      data: { ...document, retryable: false, status: "failed" },
+    });
+    mockedProgress.mockResolvedValue({
+      ok: true,
+      data: { ...progress, status: "failed", job_status: "failed", retryable: false },
+    });
+
+    await renderPage("member");
+
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Process again" })).not.toBeInTheDocument();
   });
 
   it("keeps the state section honest when progress cannot be loaded", async () => {

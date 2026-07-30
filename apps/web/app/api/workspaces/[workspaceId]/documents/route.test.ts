@@ -26,6 +26,7 @@ const accepted = {
   status: "pending" as const,
   created_at: "2026-07-29T10:00:00Z",
   archived_at: null,
+  retryable: false,
 };
 
 /**

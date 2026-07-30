@@ -2,10 +2,14 @@
  * Lifecycle controls for one document, shared by the list and the detail page.
  *
  * Which controls appear mirrors the API's role matrix and the document's own
- * state — retry only for a failed document, restore only for an archived one —
- * so the UI never advertises an action that is guaranteed to fail. It is a
- * mirror, not a gate: every control posts to the API, which re-authorizes it
- * and answers with a stable code if this mirror has drifted.
+ * state — restore only for an archived one — so the UI never advertises an
+ * action that is guaranteed to fail. It is a mirror, not a gate: every control
+ * posts to the API, which re-authorizes it and answers with a stable code if
+ * this mirror has drifted.
+ *
+ * Retry is the exception to the mirroring: whether another run is possible
+ * depends on why the last one failed, which only the API knows, so the control
+ * follows the server-computed `retryable` rather than a local rule.
  *
  * Destructive controls confirm first, and permanent deletion is offered only
  * once a document is archived, so evidence still in use cannot be destroyed by
@@ -28,9 +32,13 @@ import type { Document } from "../lib/contracts";
 
 const idleState: FormState = { status: "idle" };
 
+/**
+ * Only `canManage` lives here. Retry is not role-gated locally: the API folds
+ * the caller's `uploadDocuments` capability into `Document.retryable`, so a
+ * second local copy of that rule could only drift from it.
+ */
 export type DocumentCapabilities = Readonly<{
   canManage: boolean;
-  canUpload: boolean;
 }>;
 
 function PendingButton({
@@ -128,7 +136,10 @@ export function DocumentControls({ capabilities, entry, workspaceId }: DocumentC
       >
         Download
       </a>
-      {capabilities.canUpload && entry.status === "failed" && !archived ? (
+      {/* The API's own verdict, not `status === "failed"`: a deterministic
+          failure is never retryable, and rendering the control from status
+          alone would offer an action guaranteed to return 409. */}
+      {entry.retryable ? (
         <ActionForm
           action={retryDocumentAction}
           buttonClassName="secondary-button"
