@@ -17,13 +17,16 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.permissions import WorkspaceAction, allows
 from app.db.models.documents import Document
-from app.db.models.enums import DocumentStatus, IngestionStatus
+from app.db.models.enums import DocumentStatus, IngestionStatus, MembershipRole
 from app.db.models.operations import IngestionJob
 from app.db.repositories.audit import AuditLogRepository
 from app.db.repositories.documents import DocumentRepository, DocumentVersionRepository
+from app.db.repositories.ingestion import IngestionJobRepository
+from app.documents.keys import document_prefix
+from app.documents.purge import collect_purge
 from app.ingestion.queue import JobMessage, JobQueue
-from app.storage.base import ObjectStorage
 
 
 class DocumentNotFoundError(Exception):
@@ -38,8 +41,40 @@ class DocumentNotRetryableError(Exception):
     """Only a failed ingestion may be started again on request."""
 
 
+class DocumentPermanentlyFailedError(Exception):
+    """The failure was deterministic; the same bytes cannot succeed."""
+
+
+class DocumentProcessingError(Exception):
+    """A worker is mid-run on this document; deletion must wait for it."""
+
+
 class DeleteRequiresArchiveError(Exception):
     """Permanent deletion is only offered for an already archived document."""
+
+
+def may_retry(
+    document: Document,
+    *,
+    permanent_failure: bool,
+    role: MembershipRole,
+) -> bool:
+    """Whether *this* caller may ask for another ingestion run right now.
+
+    The one predicate behind every `retryable` field the API reports, so a
+    client is never offered a control the endpoint would refuse. It answers the
+    same three questions `retry_ingestion` does — is the document in a state
+    that can be retried, could another run over the same bytes plausibly
+    succeed, and does this caller hold `UPLOAD_DOCUMENTS` — because a viewer
+    told "retryable" would get a 403, and a deterministically failed document
+    would get a 409.
+    """
+    return (
+        document.archived_at is None
+        and document.status is DocumentStatus.FAILED
+        and not permanent_failure
+        and allows(role, WorkspaceAction.UPLOAD_DOCUMENTS)
+    )
 
 
 async def _load(
@@ -47,6 +82,22 @@ async def _load(
     document_id: uuid.UUID,
 ) -> Document:
     document = await documents.get(document_id)
+    if document is None:
+        raise DocumentNotFoundError
+    return document
+
+
+async def _load_locked(
+    documents: DocumentRepository,
+    document_id: uuid.UUID,
+) -> Document:
+    """Load a document holding its row lock for the rest of the transaction.
+
+    Used by the transitions that branch on state and then act on that branch —
+    retry and delete — so two concurrent callers cannot both read the
+    pre-transition value and both proceed.
+    """
+    document = await documents.get_for_update(document_id)
     if document is None:
         raise DocumentNotFoundError
     return document
@@ -129,13 +180,28 @@ async def retry_ingestion(
     The failed job row is left as it is and a new one is inserted, so the
     failure history survives and the worker's compare-and-set claim still sees
     a clean `QUEUED` row.
+
+    The document row is locked for the whole transition. The worker's claim is
+    a compare-and-set on one job id, so it deduplicates duplicate *delivery* of
+    a single job but not two distinct jobs; without the lock, two concurrent
+    retries would each read `FAILED`, each insert a job, and two workers would
+    then race over the same pages and chunks.
+
+    A permanent failure is refused: those are deterministic — a stored-object
+    hash mismatch, an unparseable file, a provenance violation — so another run
+    over the same unchanged bytes would fail in exactly the same way.
     """
     documents = DocumentRepository(session, workspace_id)
-    document = await _load(documents, document_id)
+    document = await _load_locked(documents, document_id)
     if document.archived_at is not None:
         raise DocumentArchivedError
     if document.status is not DocumentStatus.FAILED:
         raise DocumentNotRetryableError
+
+    jobs = IngestionJobRepository(session, workspace_id)
+    latest = await jobs.get_latest_for_document(document.id)
+    if latest is not None and latest.permanent_failure:
+        raise DocumentPermanentlyFailedError
 
     document.status = DocumentStatus.PENDING
     job = IngestionJob(
@@ -164,12 +230,11 @@ async def retry_ingestion(
 async def delete_document(
     *,
     session: AsyncSession,
-    storage: ObjectStorage,
     workspace_id: uuid.UUID,
     actor_id: uuid.UUID,
     document_id: uuid.UUID,
 ) -> None:
-    """Permanently delete an archived document, its rows, and its bytes.
+    """Permanently delete an archived document and schedule its bytes for purge.
 
     Requires the document to be archived first: that state has already removed
     it from evidence and is reversible, so nothing is destroyed on the strength
@@ -177,19 +242,46 @@ async def delete_document(
     and embeddings; the audit event is written first and survives because audit
     rows reference resources by id rather than by foreign key.
 
-    Rows are removed before the stored objects so a storage failure rolls the
-    whole request back rather than leaving a downloadable document whose bytes
-    are gone. Uploads currently create exactly one version, so the purge is a
-    single object and cannot half-succeed; multi-version documents would need
-    the purge moved behind a committed deletion marker.
+    Refused while a worker is mid-run on the document: the cascade would take
+    the claimed job row out from under it, leaving it writing stages to a row
+    that no longer exists. The document row is locked for the whole check, so a
+    worker cannot claim a queued job in the gap; the worker also tolerates a
+    vanished row, which covers a row removed by any other means.
+
+    No object-storage call happens here. Rows and objects cannot be deleted in
+    one transaction, and either ordering strands something on failure — a
+    document that still issues download links for bytes that are gone, or bytes
+    that outlive their document. Instead the deletion commits a `StoragePurge`
+    record with the rows, and the sweeper in `app.documents.purge` deletes the
+    objects afterwards and retries until it succeeds. The instruction is
+    durable, so a storage outage delays the purge rather than losing it.
+
+    The record carries the document's key *prefix*, not only the keys the rows
+    knew: a page image is written to storage before its `pages` row is
+    committed, so a run that crashed mid-OCR leaves content the database never
+    recorded. Purging the prefix removes those too — otherwise a "permanent"
+    deletion could leave pictures of the document's pages readable forever.
     """
     documents = DocumentRepository(session, workspace_id)
-    document = await _load(documents, document_id)
+    document = await _load_locked(documents, document_id)
     if document.archived_at is None:
         raise DeleteRequiresArchiveError
+    if await IngestionJobRepository(session, workspace_id).has_running_for_document(document.id):
+        raise DocumentProcessingError
 
-    versions = await DocumentVersionRepository(session).list_for_document(document.id)
-    storage_keys = [version.storage_key for version in versions]
+    version_repository = DocumentVersionRepository(session)
+    versions = await version_repository.list_for_document(document.id)
+    known_keys = [version.storage_key for version in versions]
+    known_keys.extend(await version_repository.list_page_image_keys(document.id))
+    prefix = document_prefix(workspace_id, document.id)
+    session.add(
+        collect_purge(
+            workspace_id=workspace_id,
+            document_id=document.id,
+            keys=known_keys,
+            key_prefix=prefix,
+        )
+    )
     await AuditLogRepository(session).record(
         action="document.deleted",
         resource_type="document",
@@ -199,12 +291,12 @@ async def delete_document(
         detail={
             "sha256": document.sha256,
             "size_bytes": document.size_bytes,
-            "version_count": len(storage_keys),
+            "version_count": len(versions),
+            "recorded_object_count": len(known_keys),
+            "purge_prefix": prefix,
         },
     )
     await documents.delete(document)
-    for key in storage_keys:
-        await storage.delete_object(key)
 
 
 __all__ = [
@@ -212,8 +304,11 @@ __all__ = [
     "DocumentArchivedError",
     "DocumentNotFoundError",
     "DocumentNotRetryableError",
+    "DocumentPermanentlyFailedError",
+    "DocumentProcessingError",
     "archive_document",
     "delete_document",
+    "may_retry",
     "restore_document",
     "retry_ingestion",
 ]

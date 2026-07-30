@@ -2,13 +2,19 @@ import { render, screen } from "@testing-library/react";
 
 import DocumentsPage from "./page";
 import DocumentsLoading from "./loading";
-import { fetchCurrentUser, fetchDocuments, fetchWorkspace } from "../../../../../lib/attest-api";
+import {
+  fetchCurrentUser,
+  fetchDocuments,
+  fetchUploadPolicy,
+  fetchWorkspace,
+} from "../../../../../lib/attest-api";
 import { SESSION_EXPIRED } from "../../../../../lib/session";
 import type { Document, MembershipRole } from "../../../../../lib/contracts";
 
 vi.mock("../../../../../lib/attest-api", () => ({
   fetchCurrentUser: vi.fn(),
   fetchDocuments: vi.fn(),
+  fetchUploadPolicy: vi.fn(),
   fetchWorkspace: vi.fn(),
 }));
 
@@ -30,7 +36,17 @@ vi.mock("next/navigation", () => ({
 
 const mockedUser = vi.mocked(fetchCurrentUser);
 const mockedDocuments = vi.mocked(fetchDocuments);
+const mockedPolicy = vi.mocked(fetchUploadPolicy);
 const mockedWorkspace = vi.mocked(fetchWorkspace);
+
+const policy = {
+  ok: true as const,
+  data: {
+    max_upload_bytes: 25 * 1024 * 1024,
+    max_filename_length: 255,
+    accepted_extensions: [".pdf", ".txt", ".md", ".markdown", ".docx"],
+  },
+};
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -66,6 +82,7 @@ const ready: Document = {
   status: "ready",
   created_at: "2026-07-01T09:00:00Z",
   archived_at: null,
+  retryable: false,
 };
 
 const renderPage = async (
@@ -85,6 +102,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedUser.mockResolvedValue(user);
   mockedDocuments.mockResolvedValue({ ok: true, data: [ready] });
+  mockedPolicy.mockResolvedValue(policy);
 });
 
 describe("DocumentsPage", () => {
@@ -97,6 +115,36 @@ describe("DocumentsPage", () => {
     // Archived documents are withdrawn from evidence, so they are out of the
     // default view rather than mixed in with citable ones.
     expect(mockedDocuments).toHaveBeenCalledWith(WORKSPACE_ID, { includeArchived: false });
+  });
+
+  it("shows the deployment's own upload limit, not the compiled default", async () => {
+    mockedPolicy.mockResolvedValue({
+      ok: true,
+      data: { ...policy.data, accepted_extensions: [".pdf"], max_upload_bytes: 100 * 1024 * 1024 },
+    });
+
+    await renderPage("member");
+
+    expect(screen.getByText(/\.pdf up to 100 MB/)).toBeInTheDocument();
+  });
+
+  it("still offers upload when the policy cannot be read, without enforcing a guess", async () => {
+    // The API remains the enforcement point, so a policy read that fails must
+    // degrade rather than block uploading entirely — but it must not turn the
+    // compiled-in default into a local limit either. On a deployment that raised
+    // MAX_UPLOAD_BYTES that would refuse files the API accepts, so the hint says
+    // "usually" and the size check is skipped until a real limit is known.
+    mockedPolicy.mockResolvedValue({
+      ok: false,
+      code: "api_unreachable",
+      message: "The service is unavailable.",
+      status: 503,
+    });
+
+    await renderPage("member");
+
+    expect(screen.getByRole("button", { name: "Upload document" })).toBeInTheDocument();
+    expect(screen.getByText(/usually up to 25 MB/)).toBeInTheDocument();
   });
 
   it("explains to a viewer why there is no upload control", async () => {

@@ -23,6 +23,7 @@ function documentWith(overrides: Partial<Document>): Document {
     status: "ready",
     created_at: "2026-07-01T09:00:00Z",
     archived_at: null,
+    retryable: false,
     ...overrides,
   };
 }
@@ -47,7 +48,7 @@ describe("DocumentList", () => {
   it("states each document's processing state and links to its detail page", () => {
     render(
       <DocumentList
-        capabilities={{ canManage: true, canUpload: true }}
+        capabilities={{ canManage: true }}
         documents={[ready, archived]}
         workspaceId={WORKSPACE_ID}
       />,
@@ -77,7 +78,7 @@ describe("DocumentList", () => {
     });
     const { container } = render(
       <DocumentList
-        capabilities={{ canManage: false, canUpload: false }}
+        capabilities={{ canManage: false }}
         documents={[hostile]}
         workspaceId={WORKSPACE_ID}
       />,
@@ -93,7 +94,7 @@ describe("DocumentList", () => {
     // if every data cell carries the header text it stands in for.
     render(
       <DocumentList
-        capabilities={{ canManage: true, canUpload: true }}
+        capabilities={{ canManage: true }}
         documents={[ready]}
         workspaceId={WORKSPACE_ID}
       />,

@@ -7,7 +7,13 @@ import { SystemState } from "../../../../../components/system-state";
 import { WorkspaceNav } from "../../../../../components/workspace-nav";
 import { Feedback } from "../../../../../components/feedback";
 import { errorCodes } from "../../../../../lib/contracts";
-import { fetchCurrentUser, fetchDocuments, fetchWorkspace } from "../../../../../lib/attest-api";
+import {
+  fetchCurrentUser,
+  fetchDocuments,
+  fetchUploadPolicy,
+  fetchWorkspace,
+} from "../../../../../lib/attest-api";
+import { ACCEPTED_EXTENSIONS } from "../../../../../lib/upload-rules";
 import { allows } from "../../../../../lib/permissions";
 import { SESSION_EXPIRED } from "../../../../../lib/session";
 
@@ -31,13 +37,14 @@ export default async function DocumentsPage({ params, searchParams }: DocumentsP
   const { archived, deleted } = await searchParams;
   const includeArchived = archived === "1";
 
-  const [user, workspace, documents] = await Promise.all([
+  const [user, workspace, documents, policy] = await Promise.all([
     fetchCurrentUser(),
     fetchWorkspace(workspaceId),
     fetchDocuments(workspaceId, { includeArchived }),
+    fetchUploadPolicy(workspaceId),
   ]);
 
-  for (const result of [user, workspace, documents]) {
+  for (const result of [user, workspace, documents, policy]) {
     if (!result.ok && result.code === SESSION_EXPIRED) {
       redirect(`/login?expired=1&next=/workspaces/${workspaceId}/documents`);
     }
@@ -111,7 +118,7 @@ export default async function DocumentsPage({ params, searchParams }: DocumentsP
               />
             ) : (
               <DocumentList
-                capabilities={{ canManage, canUpload }}
+                capabilities={{ canManage }}
                 documents={documents.data}
                 workspaceId={workspace.data.id}
               />
@@ -128,7 +135,19 @@ export default async function DocumentsPage({ params, searchParams }: DocumentsP
         {canUpload ? (
           <section aria-labelledby="upload-title" className="workspace-upload">
             <h2 id="upload-title">Add a document</h2>
-            <DocumentUpload workspaceId={workspace.data.id} />
+            {/* The deployment's own limits when the policy loaded. A failed
+                policy request passes `null`, not the default: an unknown cap
+                must not be enforced locally, or a deployment that raised it
+                would have valid files refused here. The mirrored extension list
+                is different — it is pinned to the API's by a drift test, so
+                falling back to it cannot contradict the deployment. */}
+            <DocumentUpload
+              acceptedExtensions={
+                policy.ok ? policy.data.accepted_extensions : [...ACCEPTED_EXTENSIONS]
+              }
+              maxUploadBytes={policy.ok ? policy.data.max_upload_bytes : null}
+              workspaceId={workspace.data.id}
+            />
           </section>
         ) : null}
       </main>

@@ -8,15 +8,19 @@ storage, presigned downloads, authorization, and audit events. They require
 import io
 import uuid
 import zipfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
 from app.config import Settings
-from app.db.models.documents import Document, DocumentVersion
-from app.db.models.enums import DocumentStatus
-from app.db.models.operations import AuditLog, IngestionJob
+from app.db.models.documents import Document, DocumentVersion, Page
+from app.db.models.enums import DocumentStatus, IngestionStatus
+from app.db.models.operations import AuditLog, IngestionJob, StoragePurge
+from app.db.repositories.purges import StoragePurgeRepository
+from app.documents.keys import page_image_key
+from app.documents.purge import purge_one
 from app.storage.s3 import S3ObjectStorage
 from botocore.exceptions import ClientError
 from sqlalchemy import func, select
@@ -450,6 +454,28 @@ async def test_retry_only_reprocesses_a_failed_document(
         assert error_code(missing) == "document_not_found"
 
 
+def purge_is_complete(purge: StoragePurge) -> bool:
+    """Read the verdict through a call so a narrowed `None` cannot stick."""
+    return purge.completed_at is not None
+
+
+async def run_pending_purge(
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> bool:
+    """Run the sweeper's work on this session's uncommitted purge record.
+
+    The sweeper itself opens its own sessions, which cannot see a rolled-back
+    test transaction, so the test drives `purge_one` directly on the same
+    session. `test_ingestion_worker.py` covers the committed loop.
+    """
+    purge = await StoragePurgeRepository(db_session).claim_pending()
+    assert purge is not None, "permanent deletion must leave a purge record"
+    completed = await purge_one(storage=object_storage, purge=purge)
+    await db_session.flush()
+    return completed
+
+
 async def test_delete_requires_archive_and_purges_content(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -479,8 +505,17 @@ async def test_delete_requires_archive_and_purges_content(
     gone = await client.get(f"{base}/{document_id}", headers=owner.headers)
     assert gone.status_code == 404
     assert await db_session.get(Document, uuid.UUID(document_id)) is None
+
+    # The request itself makes no storage call: the bytes go when the committed
+    # purge record is swept, so a storage failure can never strand a surviving
+    # document whose content is already gone.
+    assert await object_storage.get_object(storage_key) == PDF_BYTES
+    assert await run_pending_purge(db_session, object_storage)
     with pytest.raises(ClientError, match="NoSuchKey"):
         await object_storage.get_object(storage_key)
+
+    # Nothing is left to sweep, and re-running is harmless either way.
+    assert await StoragePurgeRepository(db_session).claim_pending() is None
 
     # The audit trail outlives the document it describes.
     logged = (
@@ -493,6 +528,7 @@ async def test_delete_requires_archive_and_purges_content(
     ).all()
     assert len(logged) == 1
     assert logged[0].detail["version_count"] == 1
+    assert logged[0].detail["purge_prefix"].endswith(f"documents/{document_id}/")
 
 
 async def test_lifecycle_authorization_matrix(client: httpx.AsyncClient) -> None:
@@ -555,3 +591,315 @@ async def test_listing_and_detail_for_members(client: httpx.AsyncClient) -> None
     )
     assert detail.status_code == 200
     assert detail.json()["sha256"] == uploaded.json()["sha256"]
+
+
+async def test_delete_purges_page_images_including_ones_no_row_recorded(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> None:
+    """Page images are document content and must not outlive a deletion.
+
+    When `ingestion_store_page_images` is on, the worker renders a PNG per page
+    and records its key on the `pages` row — but it writes the object *before*
+    that row exists, and persists every row only after the OCR loop. A run that
+    failed mid-OCR therefore leaves images the database never recorded, so this
+    also plants an unrecorded image under the document's prefix: a purge driven
+    by rows alone would leave pictures of the pages readable in the bucket
+    forever.
+    """
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    version = await db_session.scalar(
+        select(DocumentVersion).where(DocumentVersion.document_id == uuid.UUID(document_id))
+    )
+    assert version is not None
+
+    recorded_key = page_image_key(
+        uuid.UUID(workspace_id),
+        uuid.UUID(document_id),
+        version_number=version.version_number,
+        page_number=1,
+    )
+    orphaned_key = page_image_key(
+        uuid.UUID(workspace_id),
+        uuid.UUID(document_id),
+        version_number=version.version_number,
+        page_number=2,
+    )
+    for key in (recorded_key, orphaned_key):
+        await object_storage.put_object(key, b"\x89PNG\r\n\x1a\n", "image/png")
+    db_session.add(
+        Page(
+            document_version_id=version.id,
+            page_number=1,
+            text="rendered page",
+            image_storage_key=recorded_key,
+        )
+    )
+    await db_session.flush()
+
+    await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+    deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+    assert await run_pending_purge(db_session, object_storage)
+
+    for key in (recorded_key, orphaned_key, version.storage_key):
+        with pytest.raises(ClientError, match="NoSuchKey"):
+            await object_storage.get_object(key)
+
+    logged = await db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == "document.deleted",
+            AuditLog.resource_id == uuid.UUID(document_id),
+        )
+    )
+    assert logged is not None
+    # One version, and two objects the rows knew about: the upload and the one
+    # page image that reached a `pages` row. The third is only reachable through
+    # the prefix, which is why the purge does not trust this count.
+    assert logged.detail["version_count"] == 1
+    assert logged.detail["recorded_object_count"] == 2
+
+
+async def test_a_failed_purge_keeps_its_record_for_a_later_attempt(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> None:
+    """The whole point of the record: a storage failure must not lose the work.
+
+    Deleting rows before objects used to mean a storage failure rolled the
+    request back; the reverse meant a commit failure stranded a document with no
+    bytes. Now neither happens — the deletion is committed, and an unreachable
+    bucket only delays the purge.
+    """
+
+    class BrokenStorage:
+        """Lists like the real bucket, refuses every delete."""
+
+        def __init__(self, inner: S3ObjectStorage) -> None:
+            self._inner = inner
+
+        async def put_object(self, key: str, data: bytes, content_type: str) -> None:
+            await self._inner.put_object(key, data, content_type)
+
+        async def get_object(self, key: str) -> bytes:
+            return await self._inner.get_object(key)
+
+        async def list_keys(self, prefix: str) -> Sequence[str]:
+            return await self._inner.list_keys(prefix)
+
+        async def delete_object(self, key: str) -> None:
+            msg = "storage is unreachable"
+            raise RuntimeError(msg)
+
+        async def presigned_get_url(self, key: str, expires_in_seconds: int) -> str:
+            return await self._inner.presigned_get_url(key, expires_in_seconds)
+
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    storage_key = await db_session.scalar(
+        select(DocumentVersion.storage_key).where(
+            DocumentVersion.document_id == uuid.UUID(document_id)
+        )
+    )
+    assert storage_key is not None
+
+    await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+    deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+    # The document is gone regardless of what storage does next.
+    assert await db_session.get(Document, uuid.UUID(document_id)) is None
+
+    purge = await StoragePurgeRepository(db_session).claim_pending()
+    assert purge is not None
+    assert not await purge_one(
+        storage=BrokenStorage(object_storage),
+        purge=purge,
+    )
+    await db_session.flush()
+    assert not purge_is_complete(purge)
+    assert purge.attempts == 1
+    first_error = purge.last_error
+    assert first_error is not None and "unreachable" in first_error
+
+    # A later pass finds the same record and finishes the job.
+    assert await run_pending_purge(db_session, object_storage)
+    assert purge_is_complete(purge)
+    assert purge.attempts == 2
+    assert purge.last_error is None
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        await object_storage.get_object(storage_key)
+
+
+async def test_delete_is_refused_while_a_worker_is_mid_run(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Deleting a claimed job would pull the row out from under the worker."""
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+    await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+
+    job = await db_session.scalar(
+        select(IngestionJob).where(IngestionJob.document_id == uuid.UUID(document_id))
+    )
+    assert job is not None
+    job.status = IngestionStatus.RUNNING
+    await db_session.flush()
+
+    refused = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert refused.status_code == 409
+    assert error_code(refused) == "document_processing"
+    assert await db_session.get(Document, uuid.UUID(document_id)) is not None
+
+    # A merely queued job is not blocking: the worker's claim already drops a
+    # message whose row has gone, and refusing here would make a document
+    # undeletable whenever its queue is backed up.
+    job.status = IngestionStatus.QUEUED
+    await db_session.flush()
+    deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+
+
+async def test_permanent_failures_are_not_retryable(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A deterministic failure would fail identically on the same bytes.
+
+    The worker records both exhausted-transient and permanent failures as
+    `FAILED`; only the transient kind can plausibly succeed on another run.
+    """
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    await force_status(db_session, document_id, DocumentStatus.FAILED)
+    job = await db_session.scalar(
+        select(IngestionJob).where(IngestionJob.document_id == uuid.UUID(document_id))
+    )
+    assert job is not None
+    job.status = IngestionStatus.FAILED
+    job.permanent_failure = True
+    job.error = "stored object hash mismatch"
+    await db_session.flush()
+
+    refused = await client.post(f"{base}/{document_id}/retry", headers=owner.headers)
+    assert refused.status_code == 409
+    assert error_code(refused) == "document_permanently_failed"
+
+    # ...and every representation says so rather than offering a doomed button.
+    # The list matters as much as the status endpoint: it is what the library
+    # page renders its controls from, and it has no per-row status request.
+    progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert progress.json()["retryable"] is False
+    detail = await client.get(f"{base}/{document_id}", headers=owner.headers)
+    assert detail.json()["retryable"] is False
+    listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in listing.json()] == [False]
+
+    # A transient failure that merely exhausted its attempts stays retryable.
+    job.permanent_failure = False
+    await db_session.flush()
+    progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert progress.json()["retryable"] is True
+    detail = await client.get(f"{base}/{document_id}", headers=owner.headers)
+    assert detail.json()["retryable"] is True
+    listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in listing.json()] == [True]
+
+    # Only the latest run decides, and the list must agree with the status
+    # endpoint about which run that is. `created_at` defaults to `now()`, which
+    # is transaction-start time in PostgreSQL, so the newer job's timestamp is
+    # set explicitly rather than tying with the existing one.
+    db_session.add(
+        IngestionJob(
+            workspace_id=uuid.UUID(workspace_id),
+            document_id=uuid.UUID(document_id),
+            status=IngestionStatus.FAILED,
+            permanent_failure=True,
+            created_at=datetime.now(UTC) + timedelta(minutes=1),
+        )
+    )
+    await db_session.flush()
+    listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in listing.json()] == [False]
+    progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert progress.json()["retryable"] is False
+
+
+async def test_retryable_reflects_the_callers_own_capability(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """`retryable` must mean "you may retry", not "someone may".
+
+    A viewer holds no `UPLOAD_DOCUMENTS`, so reporting the document state alone
+    would advertise a button the same caller is refused.
+    """
+    owner = await make_account(client, "owner@example.com")
+    viewer = await make_account(client, "viewer@example.com")
+    workspace_id = await make_workspace(client, owner)
+    await add_member(client, owner, workspace_id, viewer, "viewer")
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    await force_status(db_session, document_id, DocumentStatus.FAILED)
+
+    as_owner = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
+    assert as_owner.json()["retryable"] is True
+
+    as_viewer = await client.get(f"{base}/{document_id}/status", headers=viewer.headers)
+    assert as_viewer.status_code == 200
+    assert as_viewer.json()["retryable"] is False
+
+    # The same scoping on the document itself, which is what renders the control.
+    viewer_listing = await client.get(base, headers=viewer.headers)
+    assert [entry["retryable"] for entry in viewer_listing.json()] == [False]
+    owner_listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in owner_listing.json()] == [True]
+
+    # And the flag matches what the endpoint actually does for that caller.
+    refused = await client.post(f"{base}/{document_id}/retry", headers=viewer.headers)
+    assert refused.status_code == 403
+
+
+async def test_upload_policy_reports_the_deployed_limits(client: httpx.AsyncClient) -> None:
+    """Clients read the effective limits instead of mirroring the defaults."""
+    owner = await make_account(client, "owner@example.com")
+    viewer = await make_account(client, "viewer@example.com")
+    workspace_id = await make_workspace(client, owner)
+    await add_member(client, owner, workspace_id, viewer, "viewer")
+
+    # Readable by any member: a viewer never uploads, but the same page renders
+    # the limits, and a 403 there would be a confusing way to say "read only".
+    policy = await client.get(
+        f"/api/v1/workspaces/{workspace_id}/documents/policy",
+        headers=viewer.headers,
+    )
+    assert policy.status_code == 200, policy.text
+    body = policy.json()
+    assert body["max_upload_bytes"] == 25 * 1024 * 1024
+    assert body["max_filename_length"] == 255
+    assert sorted(body["accepted_extensions"]) == [".docx", ".markdown", ".md", ".pdf", ".txt"]
+
+    # The literal path must not be captured as a document id.
+    assert "document_not_found" not in policy.text
+
+    outsider = await make_account(client, "outsider@example.com")
+    hidden = await client.get(
+        f"/api/v1/workspaces/{workspace_id}/documents/policy",
+        headers=outsider.headers,
+    )
+    assert hidden.status_code == 404

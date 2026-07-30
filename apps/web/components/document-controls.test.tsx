@@ -8,7 +8,7 @@ import {
   restoreDocumentAction,
   retryDocumentAction,
 } from "../app/document-actions";
-import type { Document, DocumentStatus } from "../lib/contracts";
+import type { Document } from "../lib/contracts";
 
 vi.mock("../app/document-actions", () => ({
   archiveDocumentAction: vi.fn(),
@@ -25,9 +25,8 @@ const mockedRetry = vi.mocked(retryDocumentAction);
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const DOCUMENT_ID = "44444444-4444-4444-8444-444444444444";
 
-const OWNER: DocumentCapabilities = { canManage: true, canUpload: true };
-const MEMBER: DocumentCapabilities = { canManage: false, canUpload: true };
-const VIEWER: DocumentCapabilities = { canManage: false, canUpload: false };
+const MANAGER: DocumentCapabilities = { canManage: true };
+const NON_MANAGER: DocumentCapabilities = { canManage: false };
 
 function documentWith(overrides: Partial<Document> = {}): Document {
   return {
@@ -40,6 +39,7 @@ function documentWith(overrides: Partial<Document> = {}): Document {
     status: "ready",
     created_at: "2026-07-01T09:00:00Z",
     archived_at: null,
+    retryable: false,
     ...overrides,
   };
 }
@@ -66,7 +66,7 @@ beforeEach(() => {
 
 describe("DocumentControls", () => {
   it("downloads through a link, so no presigned URL is rendered into the page", () => {
-    renderControls(OWNER);
+    renderControls(MANAGER);
 
     // The href points at this app's own route handler; the storage URL is
     // minted server side at click time and never appears in the HTML.
@@ -78,7 +78,7 @@ describe("DocumentControls", () => {
 
   it("archives after confirmation and passes both ids", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    renderControls(OWNER);
+    renderControls(MANAGER);
 
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
 
@@ -91,7 +91,7 @@ describe("DocumentControls", () => {
 
   it("does not archive when the confirmation is declined", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderControls(OWNER);
+    renderControls(MANAGER);
 
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
 
@@ -102,12 +102,12 @@ describe("DocumentControls", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     // Permanent deletion is deliberately unreachable for a document still in
     // use as evidence: archiving is the reversible step that precedes it.
-    const active = renderControls(OWNER);
+    const active = renderControls(MANAGER);
     expect(screen.queryByRole("button", { name: "Delete permanently" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
     active.unmount();
 
-    renderControls(OWNER, { archived_at: "2026-07-20T12:00:00Z" });
+    renderControls(MANAGER, { archived_at: "2026-07-20T12:00:00Z" });
     expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
     expect(mockedRestore).toHaveBeenCalledTimes(1);
@@ -117,46 +117,39 @@ describe("DocumentControls", () => {
     expect(mockedDelete).toHaveBeenCalledTimes(1);
   });
 
-  it("offers reprocessing only for a failed, unarchived document", async () => {
-    const cases: ReadonlyArray<readonly [DocumentStatus, boolean]> = [
-      ["pending", false],
-      ["processing", false],
-      ["ready", false],
-      ["quarantined", false],
-      ["failed", true],
-    ];
-    for (const [status, offered] of cases) {
-      const view = renderControls(MEMBER, { status });
-      const button = screen.queryByRole("button", { name: "Process again" });
-      expect(button === null).toBe(!offered);
+  it("offers reprocessing from the API's verdict, never from status alone", async () => {
+    // The API decides: a failed document whose failure was deterministic — a
+    // hash mismatch, an unparseable file — reports `retryable: false`, and
+    // offering "Process again" for it would guarantee a 409. A caller without
+    // `uploadDocuments` gets the same false, and would have got a 403.
+    const failedButDoomed = renderControls(NON_MANAGER, {
+      retryable: false,
+      status: "failed",
+    });
+    expect(screen.queryByRole("button", { name: "Process again" })).not.toBeInTheDocument();
+    failedButDoomed.unmount();
+
+    for (const status of ["pending", "processing", "ready", "quarantined"] as const) {
+      const view = renderControls(NON_MANAGER, { retryable: false, status });
+      expect(screen.queryByRole("button", { name: "Process again" })).not.toBeInTheDocument();
       view.unmount();
     }
 
-    // A quarantine verdict is terminal and an archived document must be
-    // restored first, so neither offers reprocessing.
-    const archived = renderControls(MEMBER, {
-      status: "failed",
-      archived_at: "2026-07-20T12:00:00Z",
-    });
-    expect(screen.queryByRole("button", { name: "Process again" })).not.toBeInTheDocument();
-    archived.unmount();
-
-    renderControls(MEMBER, { status: "failed" });
+    renderControls(NON_MANAGER, { retryable: true, status: "failed" });
     await userEvent.click(screen.getByRole("button", { name: "Process again" }));
     expect(mockedRetry).toHaveBeenCalledTimes(1);
   });
 
   it("hides library management from members and viewers", () => {
-    const memberView = renderControls(MEMBER, { archived_at: "2026-07-20T12:00:00Z" });
+    const memberView = renderControls(NON_MANAGER, { archived_at: "2026-07-20T12:00:00Z" });
     expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete permanently" })).not.toBeInTheDocument();
     expect(screen.getByText("Owners and admins manage the library")).toBeInTheDocument();
     memberView.unmount();
 
-    renderControls(VIEWER, { status: "failed" });
-    expect(screen.queryByRole("button", { name: "Process again" })).not.toBeInTheDocument();
     // A viewer can still read the file itself.
+    renderControls(NON_MANAGER, { retryable: false, status: "failed" });
     expect(screen.getByRole("link", { name: "Download" })).toBeInTheDocument();
   });
 
@@ -167,7 +160,7 @@ describe("DocumentControls", () => {
       message: "Archive this document before deleting it permanently.",
       status: "error",
     });
-    renderControls(OWNER, { archived_at: "2026-07-20T12:00:00Z" });
+    renderControls(MANAGER, { archived_at: "2026-07-20T12:00:00Z" });
 
     await userEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
 
@@ -178,7 +171,7 @@ describe("DocumentControls", () => {
 
   it("confirms an action that succeeded", async () => {
     mockedRetry.mockResolvedValue({ message: "Processing was queued again.", status: "success" });
-    renderControls(MEMBER, { status: "failed" });
+    renderControls(NON_MANAGER, { retryable: true, status: "failed" });
 
     await userEvent.click(screen.getByRole("button", { name: "Process again" }));
 

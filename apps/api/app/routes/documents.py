@@ -18,6 +18,7 @@ from app.auth.dependencies import SessionDep, get_app_settings
 from app.auth.permissions import WorkspaceAction
 from app.auth.workspace import RequireAction, WorkspaceContext
 from app.config import Settings
+from app.db.models.documents import Document
 from app.db.models.enums import DocumentStatus
 from app.db.repositories.audit import AuditLogRepository
 from app.db.repositories.documents import DocumentRepository, DocumentVersionRepository
@@ -27,8 +28,11 @@ from app.documents.lifecycle import (
     DocumentArchivedError,
     DocumentNotFoundError,
     DocumentNotRetryableError,
+    DocumentPermanentlyFailedError,
+    DocumentProcessingError,
     archive_document,
     delete_document,
+    may_retry,
     restore_document,
     retry_ingestion,
 )
@@ -39,11 +43,13 @@ from app.documents.service import (
     WorkspaceQuotaExceededError,
     store_new_document,
 )
+from app.documents.validation import MAX_FILENAME_LENGTH, accepted_extensions
 from app.ingestion.queue import JobQueue
 from app.schemas.documents import (
     DocumentProgressResponse,
     DocumentResponse,
     DownloadLinkResponse,
+    UploadPolicyResponse,
 )
 from app.security.events import log_security_event
 from app.storage.base import ObjectStorage
@@ -74,6 +80,29 @@ def get_job_queue(request: Request) -> JobQueue:
 StorageDep = Annotated[ObjectStorage, Depends(get_object_storage)]
 QueueDep = Annotated[JobQueue, Depends(get_job_queue)]
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
+
+
+async def _describe(
+    session: SessionDep,
+    context: WorkspaceContext,
+    document: Document,
+) -> DocumentResponse:
+    """One document, with the retry verdict for this caller attached.
+
+    The verdict needs the latest run's permanence, so it costs a query; a single
+    document is worth one, and `list_documents` uses the set-wide query instead.
+    """
+    latest = await IngestionJobRepository(session, context.workspace.id).get_latest_for_document(
+        document.id
+    )
+    return DocumentResponse.of(
+        document,
+        retryable=may_retry(
+            document,
+            permanent_failure=latest is not None and latest.permanent_failure,
+            role=context.membership.role,
+        ),
+    )
 
 
 @router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
@@ -119,7 +148,26 @@ async def upload_document(
             actor_user_id=str(context.user.id),
         )
         raise errors.workspace_quota_exceeded(quota.code, quota.message) from None
-    return DocumentResponse.model_validate(document)
+    # A just-queued document is `PENDING`, so no retry is offered and the
+    # verdict needs no query.
+    return DocumentResponse.of(document, retryable=False)
+
+
+@router.get("/policy", response_model=UploadPolicyResponse)
+async def upload_policy(
+    context: ViewerContext,
+    settings: SettingsDep,
+) -> UploadPolicyResponse:
+    """The upload limits this deployment enforces, for client-side fail-fast.
+
+    Declared before `/{document_id}` so the literal path is not captured as a
+    document id.
+    """
+    return UploadPolicyResponse(
+        max_upload_bytes=settings.max_upload_bytes,
+        max_filename_length=MAX_FILENAME_LENGTH,
+        accepted_extensions=list(accepted_extensions()),
+    )
 
 
 @router.get("", response_model=list[DocumentResponse])
@@ -131,7 +179,23 @@ async def list_documents(
     documents = await DocumentRepository(session, context.workspace.id).list_ordered(
         include_archived=include_archived
     )
-    return [DocumentResponse.model_validate(document) for document in documents]
+    # One query for the whole page rather than one per row: every entry reports
+    # whether this caller may retry it, so the list can render the control
+    # without asking the status endpoint per document.
+    permanent = await IngestionJobRepository(
+        session, context.workspace.id
+    ).permanently_failed_document_ids()
+    return [
+        DocumentResponse.of(
+            document,
+            retryable=may_retry(
+                document,
+                permanent_failure=document.id in permanent,
+                role=context.membership.role,
+            ),
+        )
+        for document in documents
+    ]
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
@@ -143,7 +207,7 @@ async def get_document(
     document = await DocumentRepository(session, context.workspace.id).get(document_id)
     if document is None:
         raise errors.document_not_found()
-    return DocumentResponse.model_validate(document)
+    return await _describe(session, context, document)
 
 
 @router.get("/{document_id}/status", response_model=DocumentProgressResponse)
@@ -167,7 +231,11 @@ async def document_progress(
         error=job.error if job else None,
         updated_at=job.updated_at if job else document.updated_at,
         archived=document.archived_at is not None,
-        retryable=document.archived_at is None and document.status is DocumentStatus.FAILED,
+        retryable=may_retry(
+            document,
+            permanent_failure=job is not None and job.permanent_failure,
+            role=context.membership.role,
+        ),
     )
 
 
@@ -216,7 +284,7 @@ async def archive(
         )
     except DocumentNotFoundError:
         raise errors.document_not_found() from None
-    return DocumentResponse.model_validate(document)
+    return await _describe(session, context, document)
 
 
 @router.post("/{document_id}/restore", response_model=DocumentResponse)
@@ -234,7 +302,7 @@ async def restore(
         )
     except DocumentNotFoundError:
         raise errors.document_not_found() from None
-    return DocumentResponse.model_validate(document)
+    return await _describe(session, context, document)
 
 
 @router.post("/{document_id}/retry", response_model=DocumentProgressResponse)
@@ -259,6 +327,8 @@ async def retry(
         raise errors.document_archived() from None
     except DocumentNotRetryableError:
         raise errors.document_not_retryable() from None
+    except DocumentPermanentlyFailedError:
+        raise errors.document_permanently_failed() from None
     return DocumentProgressResponse(
         document_id=job.document_id,
         status=DocumentStatus.PENDING,
@@ -277,13 +347,16 @@ async def delete(
     document_id: uuid.UUID,
     context: ManagerContext,
     session: SessionDep,
-    storage: StorageDep,
 ) -> Response:
-    """Permanently delete an archived document, its rows, and its bytes."""
+    """Permanently delete an archived document and schedule its bytes for purge.
+
+    Takes no storage dependency on purpose: the request commits the row deletion
+    with a durable purge record, and the sweeper removes the objects afterwards
+    (see `app.documents.purge`), so no cross-system step can half-succeed here.
+    """
     try:
         await delete_document(
             session=session,
-            storage=storage,
             workspace_id=context.workspace.id,
             actor_id=context.user.id,
             document_id=document_id,
@@ -292,4 +365,6 @@ async def delete(
         raise errors.document_not_found() from None
     except DeleteRequiresArchiveError:
         raise errors.document_delete_requires_archive() from None
+    except DocumentProcessingError:
+        raise errors.document_processing() from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)

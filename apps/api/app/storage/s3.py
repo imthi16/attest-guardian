@@ -1,5 +1,6 @@
 """S3/MinIO implementation of the object-storage contract."""
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import aioboto3
@@ -45,6 +46,27 @@ class S3ObjectStorage:
         client: S3Client
         async with self._client() as client:
             await client.delete_object(Bucket=self._bucket, Key=key)
+
+    async def list_keys(self, prefix: str) -> Sequence[str]:
+        """Every key under `prefix`, following continuation tokens to the end.
+
+        A truncated listing would silently leave content behind during a
+        permanent deletion, so the pages are walked rather than sampled.
+        """
+        keys: list[str] = []
+        client: S3Client
+        async with self._client() as client:
+            token: str | None = None
+            while True:
+                arguments: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix}
+                if token is not None:
+                    arguments["ContinuationToken"] = token
+                response = await client.list_objects_v2(**arguments)
+                keys.extend(item["Key"] for item in response.get("Contents", []))
+                next_token = response.get("NextContinuationToken")
+                if not response.get("IsTruncated") or not next_token:
+                    return keys
+                token = next_token
 
     async def presigned_get_url(self, key: str, expires_in_seconds: int) -> str:
         client: S3Client

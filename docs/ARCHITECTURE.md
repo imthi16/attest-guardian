@@ -283,7 +283,7 @@ stateDiagram-v2
   failed --> pending: retry (POST /retry)
   ready --> archived: archive (POST /archive)
   archived --> ready: restore (POST /restore)
-  archived --> [*]: delete (DELETE, purges bytes)
+  archived --> [*]: delete (DELETE, bytes purged asynchronously)
   quarantined --> [*]: delete (never retried)
 ```
 
@@ -321,11 +321,37 @@ enumerates the Python action enum, so a capability added to the API without a mi
   the pipeline. A pending, processing, or ready document has nothing to retry and a second run would
   race the first over the same rows. The failed job row is kept and a new `QUEUED` job is inserted,
   so failure history survives and the worker's compare-and-set claim still sees a clean row.
+- **Retry refuses a permanent failure.** The worker records both exhausted-transient and
+  deterministic failures as `FAILED`, so `ingestion_jobs.permanent_failure` distinguishes them. A
+  hash mismatch, an unparseable file, or a provenance violation fails identically on every future
+  run over the same bytes; admitting those would let a caller queue unbounded doomed work.
+- **Retry and delete lock the document row.** Both read it `FOR UPDATE` before branching on its
+  state. The worker's claim is a compare-and-set on one job id — that makes duplicate delivery of a
+  single job safe, but does not deduplicate two distinct jobs, so two concurrent retries would
+  otherwise each enqueue one and two workers would race over the same pages and chunks.
 - **Delete** requires the document to be archived first. That state is reversible and has already
-  removed the document from evidence, so nothing is destroyed on the strength of one click. Rows are
-  deleted before the stored objects, so a storage failure rolls the request back rather than leaving
-  a downloadable document whose bytes are gone; uploads create exactly one version today, so the
-  purge is a single object and cannot half-succeed.
+  removed the document from evidence, so nothing is destroyed on the strength of one click.
+- **Delete is refused while a job is `RUNNING`.** The cascade would remove the row a worker is still
+  writing stages to. A merely `QUEUED` job is not blocking: the worker's claim already drops a
+  message whose row has gone, and refusing there would make a document undeletable whenever its
+  queue is backed up. Because the check and the cascade are not atomic, the worker also treats a
+  vanished job as abandoned rather than asserting on it.
+- **Delete purges by prefix, not by row.** Every object a document produces lives under one
+  server-generated prefix (`apps/api/app/documents/keys.py`): each version's uploaded bytes and,
+  with `INGESTION_STORE_PAGE_IMAGES` on, a rendered PNG per page. Purging the prefix rather than
+  replaying the rows matters because a page image is written to storage *before* its `pages` row is
+  committed — a run that crashed mid-OCR leaves content the database never recorded, and a
+  row-driven purge would leave pictures of the document's pages readable forever. The keys the rows
+  did know are recorded too, so the uploaded bytes are still removed if a listing call fails.
+- **Delete performs no storage call.** Rows and objects cannot be deleted in one transaction, and
+  either ordering strands something on failure: a document that still issues download links for
+  bytes that are gone, or bytes that outlive their document. So the request commits the row deletion
+  together with a durable `storage_purges` record (migration `0011`) and stops there. The sweeper in
+  `apps/api/app/documents/purge.py` — run by the ingestion worker whenever it is idle — deletes the
+  objects and marks the record complete, retrying until it succeeds. The purge is idempotent by
+  construction, since deleting an absent key is a no-op, so an interrupted record is always safe to
+  re-run. Like `requeue_stale`, the sweeper scans across workspaces and therefore needs the
+  worker's `BYPASSRLS` role; without it purge records stay pending and bytes are retained.
 
 ### Upload and download paths
 

@@ -12,8 +12,17 @@ export const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown", ".docx"]
 /** The `accept` attribute for the file input, from the same source of truth. */
 export const ACCEPT_ATTRIBUTE = ACCEPTED_EXTENSIONS.join(",");
 
-/** Mirrors `Settings.max_upload_bytes` (25 MiB) in the API. */
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+/**
+ * The API's *default* `Settings.max_upload_bytes` (25 MiB).
+ *
+ * For explaining the likely limit in hint text before the deployment's real one
+ * is known — never for accepting or rejecting a file. `max_upload_bytes` is
+ * per-environment configuration, so anything that decides an upload must use
+ * the limit served by `GET /workspaces/{id}/documents/policy`; enforcing this
+ * constant would refuse files a raised cap allows. The parity test pins it to
+ * the Python default so even the hint cannot drift.
+ */
+export const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export const MAX_FILENAME_LENGTH = 255;
 
@@ -46,8 +55,15 @@ function extensionOf(filename: string): string {
  *
  * Returns `null` when nothing local rules out the upload. The codes match the
  * API's so a rejection reads the same wherever it was decided.
+ *
+ * `maxUploadBytes` is the deployment's real cap, from its upload policy. Pass
+ * `null` when the policy could not be loaded: the size check is then skipped
+ * rather than falling back to the default, because a deployment that raised the
+ * cap would otherwise have valid files refused here on the strength of a
+ * transient failure. Skipping is safe — the API still enforces the real limit
+ * and the relay still bounds the body it buffers.
  */
-export function rejectionFor(file: File): UploadRejection | null {
+export function rejectionFor(file: File, maxUploadBytes: number | null): UploadRejection | null {
   if (file.name.length > MAX_FILENAME_LENGTH) {
     return { code: "invalid_filename", message: "The filename is too long." };
   }
@@ -62,10 +78,10 @@ export function rejectionFor(file: File): UploadRejection | null {
   if (file.size === 0) {
     return { code: "empty_file", message: "The file is empty." };
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
+  if (maxUploadBytes !== null && file.size > maxUploadBytes) {
     return {
       code: "file_too_large",
-      message: `The file exceeds the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`,
+      message: `The file exceeds the ${formatBytes(maxUploadBytes)} upload limit.`,
     };
   }
   return null;

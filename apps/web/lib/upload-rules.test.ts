@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   ACCEPT_ATTRIBUTE,
   ACCEPTED_EXTENSIONS,
-  MAX_UPLOAD_BYTES,
+  DEFAULT_MAX_UPLOAD_BYTES,
   formatBytes,
   rejectionFor,
 } from "./upload-rules";
@@ -38,11 +38,11 @@ describe("upload rule mirror", () => {
     expect(ACCEPT_ATTRIBUTE.split(",").sort()).toEqual(apiExtensions.sort());
   });
 
-  it("uses the API's upload cap", () => {
+  it("pins the fallback to the API's default upload cap", () => {
     const declared = /max_upload_bytes: int = (\d+) \* (\d+) \* (\d+)/.exec(configSource);
     expect(declared).not.toBeNull();
     const [, a, b, c] = declared ?? [];
-    expect(Number(a) * Number(b) * Number(c)).toBe(MAX_UPLOAD_BYTES);
+    expect(Number(a) * Number(b) * Number(c)).toBe(DEFAULT_MAX_UPLOAD_BYTES);
   });
 
   it("mirrors the API's filename length limit", () => {
@@ -52,31 +52,64 @@ describe("upload rule mirror", () => {
 
 describe("rejectionFor", () => {
   it("passes a file that nothing local rules out", () => {
-    expect(rejectionFor(file("report.pdf", 1024))).toBeNull();
+    expect(rejectionFor(file("report.pdf", 1024), DEFAULT_MAX_UPLOAD_BYTES)).toBeNull();
   });
 
   it("rejects an unsupported extension with the API's code", () => {
     // The `accept` attribute filters the picker, but a drag-and-drop or a
     // scripted submission can still present anything.
-    expect(rejectionFor(file("installer.exe", 1024))?.code).toBe("unsupported_file_type");
-    expect(rejectionFor(file("noextension", 1024))?.code).toBe("unsupported_file_type");
+    expect(rejectionFor(file("installer.exe", 1024), DEFAULT_MAX_UPLOAD_BYTES)?.code).toBe(
+      "unsupported_file_type",
+    );
+    expect(rejectionFor(file("noextension", 1024), DEFAULT_MAX_UPLOAD_BYTES)?.code).toBe(
+      "unsupported_file_type",
+    );
   });
 
   it("is case insensitive about the extension", () => {
-    expect(rejectionFor(file("REPORT.PDF", 1024))).toBeNull();
+    expect(rejectionFor(file("REPORT.PDF", 1024), DEFAULT_MAX_UPLOAD_BYTES)).toBeNull();
   });
 
   it("rejects an empty file", () => {
-    expect(rejectionFor(file("blank.pdf", 0))?.code).toBe("empty_file");
+    expect(rejectionFor(file("blank.pdf", 0), DEFAULT_MAX_UPLOAD_BYTES)?.code).toBe("empty_file");
   });
 
   it("rejects a file over the cap", () => {
-    expect(rejectionFor(file("scan.pdf", MAX_UPLOAD_BYTES + 1))?.code).toBe("file_too_large");
-    expect(rejectionFor(file("scan.pdf", MAX_UPLOAD_BYTES))).toBeNull();
+    expect(
+      rejectionFor(file("scan.pdf", DEFAULT_MAX_UPLOAD_BYTES + 1), DEFAULT_MAX_UPLOAD_BYTES)?.code,
+    ).toBe("file_too_large");
+    expect(
+      rejectionFor(file("scan.pdf", DEFAULT_MAX_UPLOAD_BYTES), DEFAULT_MAX_UPLOAD_BYTES),
+    ).toBeNull();
+  });
+
+  it("honours a deployment cap that differs from the API default", () => {
+    // The whole point of taking the limit as an argument: an operator who
+    // raises MAX_UPLOAD_BYTES must not have files refused in the browser, and
+    // one who lowers it must not be promised uploads the API will reject.
+    const raised = DEFAULT_MAX_UPLOAD_BYTES * 4;
+    expect(rejectionFor(file("scan.pdf", DEFAULT_MAX_UPLOAD_BYTES + 1), raised)).toBeNull();
+    expect(rejectionFor(file("scan.pdf", raised + 1), raised)?.code).toBe("file_too_large");
+
+    const lowered = 1024;
+    expect(rejectionFor(file("scan.pdf", 2048), lowered)?.code).toBe("file_too_large");
+    expect(rejectionFor(file("scan.pdf", 2048), lowered)?.message).toContain("1.0 KB");
+  });
+
+  it("skips the size check when the deployment's cap is unknown", () => {
+    // An unknown cap is not the default cap. If the policy request failed on a
+    // deployment that raised MAX_UPLOAD_BYTES, enforcing the fallback here would
+    // refuse a file the API would have accepted — so the file is sent and the
+    // API decides. Every other mirrored rule still applies.
+    expect(rejectionFor(file("scan.pdf", DEFAULT_MAX_UPLOAD_BYTES * 10), null)).toBeNull();
+    expect(rejectionFor(file("installer.exe", 1024), null)?.code).toBe("unsupported_file_type");
+    expect(rejectionFor(file("blank.pdf", 0), null)?.code).toBe("empty_file");
   });
 
   it("rejects an overlong filename", () => {
-    expect(rejectionFor(file(`${"n".repeat(300)}.pdf`, 1024))?.code).toBe("invalid_filename");
+    expect(rejectionFor(file(`${"n".repeat(300)}.pdf`, 1024), DEFAULT_MAX_UPLOAD_BYTES)?.code).toBe(
+      "invalid_filename",
+    );
   });
 });
 
@@ -85,7 +118,7 @@ describe("formatBytes", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(2048)).toBe("2.0 KB");
     expect(formatBytes(204800)).toBe("200 KB");
-    expect(formatBytes(MAX_UPLOAD_BYTES)).toBe("25 MB");
+    expect(formatBytes(DEFAULT_MAX_UPLOAD_BYTES)).toBe("25 MB");
     expect(formatBytes(5 * 1024 ** 3)).toBe("5.0 GB");
   });
 });

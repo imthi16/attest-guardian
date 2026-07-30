@@ -14,8 +14,8 @@ def test_migrations_upgrade_check_downgrade_and_reupgrade() -> None:
 
     upgrade = alembic(["upgrade", "head"], url)
     assert upgrade.returncode == 0, upgrade.stderr
-    # 15 model tables + alembic_version
-    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 16
+    # 16 model tables + alembic_version
+    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 17
     assert asyncio.run(scalar(url, VECTOR_EXTENSION_SQL)) == 1
 
     # The migration must exactly express the current models: autogenerate
@@ -30,4 +30,5 @@ def test_migrations_upgrade_check_downgrade_and_reupgrade() -> None:
 
     reupgrade = alembic(["upgrade", "head"], url)
     assert reupgrade.returncode == 0, reupgrade.stderr
-    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 16
+    # Same head as the first upgrade, so the same table count.
+    assert asyncio.run(scalar(url, TABLE_COUNT_SQL)) == 17
