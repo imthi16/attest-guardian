@@ -63,6 +63,7 @@ class RagService:
         workspace_id: uuid.UUID,
         query: str,
         actor_user_id: uuid.UUID | None = None,
+        conversation_id: uuid.UUID | None = None,
         document_id: uuid.UUID | None = None,
         language: str | None = None,
         top_k: int | None = None,
@@ -87,7 +88,7 @@ class RagService:
         terminal = await self._graph.run(state)
         terminal.trace.total_ms = (time.perf_counter() - start) * 1000
 
-        await self._record(workspace_id, actor_user_id, terminal.trace)
+        await self._record(workspace_id, actor_user_id, terminal.trace, conversation_id)
         logger.info(
             "rag answer completed",
             extra={"workspace_id": str(workspace_id), "trace": terminal.trace.as_metadata()},
@@ -100,6 +101,7 @@ class RagService:
         workspace_id: uuid.UUID,
         query: str,
         actor_user_id: uuid.UUID | None = None,
+        conversation_id: uuid.UUID | None = None,
         document_id: uuid.UUID | None = None,
         language: str | None = None,
         top_k: int | None = None,
@@ -132,7 +134,7 @@ class RagService:
                 yield stage, None
                 continue
             terminal.trace.total_ms = (time.perf_counter() - start) * 1000
-            await self._record(workspace_id, actor_user_id, terminal.trace)
+            await self._record(workspace_id, actor_user_id, terminal.trace, conversation_id)
             logger.info(
                 "rag answer completed",
                 extra={
@@ -148,11 +150,19 @@ class RagService:
         workspace_id: uuid.UUID,
         actor_user_id: uuid.UUID | None,
         trace: RagTrace,
+        conversation_id: uuid.UUID | None = None,
     ) -> None:
-        """Append an audit event carrying only the non-sensitive trace."""
+        """Append an audit event carrying only the non-sensitive trace.
+
+        `resource_id` is the conversation when the answer belongs to a thread.
+        The event already claims `resource_type: conversation`, so leaving it null
+        made it impossible to tell which thread produced a grounding decision
+        once a workspace had more than one.
+        """
         await AuditLogRepository(self._session).record(
             action=AUDIT_ACTION,
             resource_type=AUDIT_RESOURCE,
+            resource_id=conversation_id,
             workspace_id=workspace_id,
             actor_user_id=actor_user_id,
             detail=trace.as_metadata(),

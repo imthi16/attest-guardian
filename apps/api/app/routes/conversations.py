@@ -31,7 +31,7 @@ from fastapi.responses import StreamingResponse
 
 from app.auth import errors
 from app.auth.dependencies import SessionDep, get_app_settings
-from app.auth.permissions import WorkspaceAction
+from app.auth.permissions import WorkspaceAction, allows
 from app.auth.workspace import RequireAction, WorkspaceContext
 from app.config import Settings
 from app.conversations.service import (
@@ -41,8 +41,8 @@ from app.conversations.service import (
     record_answer,
     record_question,
 )
-from app.db.models.conversations import MessageFeedback
-from app.db.models.enums import FeedbackRating
+from app.db.models.enums import FeedbackRating, MessageRole
+from app.db.repositories.audit import AuditLogRepository
 from app.db.repositories.conversations import (
     ConversationRepository,
     MessageFeedbackRepository,
@@ -56,6 +56,7 @@ from app.retrieval.service import HybridRetrievalService, RetrievalConfig
 from app.schemas.answer import AnswerResponse
 from app.schemas.conversations import (
     AskRequest,
+    ConversationAnswerResponse,
     ConversationCreateRequest,
     ConversationDetailResponse,
     ConversationResponse,
@@ -68,7 +69,10 @@ logger = logging.getLogger("app.conversations")
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/conversations", tags=["conversations"])
 
-QuerierContext = Annotated[WorkspaceContext, Depends(RequireAction(WorkspaceAction.QUERY))]
+# Reading a thread is `VIEW`; asking, feedback, and deletion change workspace
+# state, so they are not covered by the read-only `QUERY` a viewer holds.
+ReaderContext = Annotated[WorkspaceContext, Depends(RequireAction(WorkspaceAction.VIEW))]
+WriterContext = Annotated[WorkspaceContext, Depends(RequireAction(WorkspaceAction.CONVERSE))]
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 
 
@@ -107,7 +111,7 @@ def _clamped_top_k(requested: int | None, settings: Settings) -> int | None:
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def create(
     payload: ConversationCreateRequest,
-    context: QuerierContext,
+    context: WriterContext,
     session: SessionDep,
 ) -> ConversationResponse:
     conversation = await create_conversation(
@@ -121,7 +125,7 @@ async def create(
 
 @router.get("", response_model=list[ConversationResponse])
 async def list_conversations(
-    context: QuerierContext,
+    context: ReaderContext,
     session: SessionDep,
 ) -> list[ConversationResponse]:
     conversations = await ConversationRepository(session, context.workspace.id).list_ordered()
@@ -131,7 +135,7 @@ async def list_conversations(
 @router.get("/{conversation_id}", response_model=ConversationDetailResponse)
 async def get_conversation(
     conversation_id: uuid.UUID,
-    context: QuerierContext,
+    context: ReaderContext,
     session: SessionDep,
 ) -> ConversationDetailResponse:
     try:
@@ -148,11 +152,11 @@ async def get_conversation(
     )
 
 
-@router.post("/{conversation_id}/messages", response_model=AnswerResponse)
+@router.post("/{conversation_id}/messages", response_model=ConversationAnswerResponse)
 async def ask(
     conversation_id: uuid.UUID,
     payload: AskRequest,
-    context: QuerierContext,
+    context: WriterContext,
     session: SessionDep,
     settings: SettingsDep,
 ) -> AnswerResponse:
@@ -171,16 +175,21 @@ async def ask(
         workspace_id=context.workspace.id,
         query=payload.question,
         actor_user_id=context.user.id,
+        conversation_id=conversation_id,
         document_id=payload.document_id,
         top_k=_clamped_top_k(payload.top_k, settings),
     )
-    await record_answer(
+    message = await record_answer(
         session=session,
         workspace_id=context.workspace.id,
         conversation_id=conversation_id,
         result=result,
     )
-    return AnswerResponse.from_result(result)
+    # The persisted id travels with the answer, as it does on the streaming
+    # route: feedback is addressed by message id, and without it a client would
+    # have to reload the thread and guess which assistant turn was its own —
+    # unreliable as soon as two questions are asked at once.
+    return ConversationAnswerResponse.of(result, message_id=message.id)
 
 
 def _sse(event: str, data: dict[str, object]) -> str:
@@ -192,7 +201,7 @@ def _sse(event: str, data: dict[str, object]) -> str:
 async def ask_streaming(
     conversation_id: uuid.UUID,
     payload: AskRequest,
-    context: QuerierContext,
+    context: WriterContext,
     session: SessionDep,
     settings: SettingsDep,
 ) -> StreamingResponse:
@@ -227,6 +236,7 @@ async def ask_streaming(
                 workspace_id=context.workspace.id,
                 query=payload.question,
                 actor_user_id=context.user.id,
+                conversation_id=conversation_id,
                 document_id=payload.document_id,
                 top_k=top_k,
             ):
@@ -244,12 +254,19 @@ async def ask_streaming(
                     "answer",
                     {"message_id": str(message.id), **answer.model_dump(mode="json")},
                 )
-        except Exception:
-            # The trace is safe to log; the client gets a stable code and no
-            # internal detail, matching the error envelope elsewhere.
-            logger.exception(
+        except Exception as error:  # noqa: BLE001 - the stream must end cleanly
+            # Only the exception *type* is recorded. A database or provider error
+            # commonly carries bound parameters — the user's raw or normalized
+            # query, and potentially evidence text — so the message and traceback
+            # are exactly what must not reach the logs. The client gets a stable
+            # code and no internal detail, matching the envelope used elsewhere.
+            logger.error(
                 "streamed answer failed",
-                extra={"workspace_id": str(context.workspace.id)},
+                extra={
+                    "workspace_id": str(context.workspace.id),
+                    "conversation_id": str(conversation_id),
+                    "error_type": type(error).__name__,
+                },
             )
             yield _sse(
                 "error",
@@ -279,7 +296,7 @@ async def submit_feedback(
     conversation_id: uuid.UUID,
     message_id: uuid.UUID,
     payload: FeedbackRequest,
-    context: QuerierContext,
+    context: WriterContext,
     session: SessionDep,
 ) -> FeedbackResponse:
     """Record or revise this reviewer's verdict on one answer.
@@ -294,31 +311,19 @@ async def submit_feedback(
     message = await MessageRepository(session).get_in_workspace(message_id, context.workspace.id)
     if message is None or message.conversation_id != conversation.id:
         raise errors.message_not_found()
+    # Feedback is a verdict on an answer. Allowing it on a user turn would let a
+    # reviewer rate their own question and contaminate evaluation data with rows
+    # the model's semantics do not cover.
+    if message.role is not MessageRole.ASSISTANT:
+        raise errors.feedback_requires_answer()
 
-    repository = MessageFeedbackRepository(session, context.workspace.id)
-    existing = await repository.get_for_reviewer(message_id, context.user.id)
-    rating = FeedbackRating(payload.rating)
-    if existing is not None:
-        existing.rating = rating
-        existing.note = payload.note
-        await session.flush()
-        # `updated_at` is `onupdate=func.now()`, so the flush expires it and the
-        # new value lives only in the database. Refresh explicitly: building the
-        # response would otherwise read an expired attribute and trigger IO from
-        # synchronous code, which async SQLAlchemy cannot do.
-        await session.refresh(existing)
-        return FeedbackResponse.of(existing)
-
-    created = await repository.add(
-        MessageFeedback(
-            workspace_id=context.workspace.id,
-            message_id=message_id,
-            reviewer_id=context.user.id,
-            rating=rating,
-            note=payload.note,
-        )
+    feedback = await MessageFeedbackRepository(session, context.workspace.id).upsert(
+        message_id=message_id,
+        reviewer_id=context.user.id,
+        rating=FeedbackRating(payload.rating),
+        note=payload.note,
     )
-    return FeedbackResponse.of(created)
+    return FeedbackResponse.of(feedback)
 
 
 @router.get(
@@ -328,7 +333,7 @@ async def submit_feedback(
 async def list_feedback(
     conversation_id: uuid.UUID,
     message_id: uuid.UUID,
-    context: QuerierContext,
+    context: ReaderContext,
     session: SessionDep,
 ) -> list[FeedbackResponse]:
     conversation = await ConversationRepository(session, context.workspace.id).get(conversation_id)
@@ -346,19 +351,42 @@ async def list_feedback(
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
     conversation_id: uuid.UUID,
-    context: QuerierContext,
+    context: WriterContext,
     session: SessionDep,
 ) -> Response:
     """Delete a thread and its turns.
 
+    Only the person who started the thread, or someone holding
+    `MANAGE_CONVERSATIONS` (owners and admins), may delete it: a member writing
+    in a shared workspace should not be able to destroy a colleague's
+    evidence-backed answer history.
+
+    Audited before the rows go. The cascade removes the messages, citations,
+    verification results, and feedback, so afterwards the audit event is the only
+    remaining record that this history existed and who removed it — audit rows
+    reference resources by id rather than by foreign key, so it survives.
+
     Citations reference chunks with `ondelete=RESTRICT`, which protects cited
     *evidence* from disappearing under an answer — it does not prevent deleting
-    the answer itself, and the cascade removes this conversation's citations
-    with it. The evidence and its documents are untouched.
+    the answer itself. The evidence and its documents are untouched.
     """
     repository = ConversationRepository(session, context.workspace.id)
     conversation = await repository.get(conversation_id)
     if conversation is None:
         raise errors.conversation_not_found()
+    if conversation.created_by != context.user.id and not allows(
+        context.membership.role, WorkspaceAction.MANAGE_CONVERSATIONS
+    ):
+        raise errors.insufficient_role()
+
+    turn_count = await repository.count_messages(conversation.id)
+    await AuditLogRepository(session).record(
+        action="conversation.deleted",
+        resource_type="conversation",
+        resource_id=conversation.id,
+        workspace_id=context.workspace.id,
+        actor_user_id=context.user.id,
+        detail={"message_count": turn_count},
+    )
     await repository.delete(conversation)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -13,23 +13,29 @@ of a durable thread. It writes three kinds of row for one question:
 * one **citation** and one **verification result** per claim, so the evidence
   behind an answer survives independently of the response that returned it.
 
-Order matters: the answer is only persisted after the pipeline finishes, so a
-failed or abandoned run leaves no assistant message implying an answer existed.
-The user message is written first and deliberately kept even then — a question
-that failed is still something the asker asked, and hiding it would make the
-thread lie about what happened.
+A turn is atomic. The question is written before the pipeline runs and the answer
+only from a terminal result, so a completed run stores both and a failed or
+abandoned one stores neither — they share the request's transaction. An
+abstention is not a failure: it is a real answer about the evidence and is stored
+like any other outcome.
+
+Both writes take the conversation's row lock. That serializes assignment of the
+next `sequence` against a concurrent turn, and bumps the conversation's own
+`updated_at` so the thread list orders by activity rather than creation.
 
 Persisted text is tenant content: it is stored verbatim and never interpolated
 into a prompt.
 """
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.conversations import Citation, Conversation, Message, VerificationResult
 from app.db.models.enums import AnswerDecision, AnswerStatus, ClaimVerdict, MessageRole
 from app.db.repositories.conversations import ConversationRepository
+from app.language import detect_language
 from app.language.processor import QueryProcessor
 from app.rag.types import AtomicClaim, RagResult
 
@@ -65,6 +71,17 @@ def _persisted_decision(decision: str) -> AnswerDecision:
     hand-written table would silently mismap if either side gained a member.
     """
     return AnswerDecision(decision)
+
+
+def _touch(conversation: Conversation) -> None:
+    """Move the thread to the top of the list by bumping its own timestamp.
+
+    Inserting a `Message` does not update the parent row, and `updated_at` only
+    changes when the conversation itself is written, so without this the "most
+    recently updated first" ordering would really be creation order and a thread
+    with a new answer would never move.
+    """
+    conversation.updated_at = datetime.now(UTC)
 
 
 class ConversationNotFoundError(Exception):
@@ -114,13 +131,15 @@ async def record_question(
     Written before the pipeline runs, so a run that fails or is abandoned still
     leaves an honest record of what was asked.
     """
-    conversation = await ConversationRepository(session, workspace_id).get(conversation_id)
+    repository = ConversationRepository(session, workspace_id)
+    conversation = await repository.get_for_update(conversation_id)
     if conversation is None:
         raise ConversationNotFoundError
 
     processed = (processor or QueryProcessor()).process(question)
     message = Message(
         conversation_id=conversation.id,
+        sequence=await repository.next_sequence(conversation.id),
         role=MessageRole.USER,
         content=processed.original,
         normalized_content=processed.normalized,
@@ -128,6 +147,7 @@ async def record_question(
         language=processed.detection.language.value,
     )
     session.add(message)
+    _touch(conversation)
     await session.flush()
     return message
 
@@ -146,16 +166,23 @@ async def record_answer(
     the evidence, and a thread that silently dropped it would misrepresent what
     the system did.
     """
-    conversation = await ConversationRepository(session, workspace_id).get(conversation_id)
+    repository = ConversationRepository(session, workspace_id)
+    conversation = await repository.get_for_update(conversation_id)
     if conversation is None:
         raise ConversationNotFoundError
 
     answer = result.answer
     message = Message(
         conversation_id=conversation.id,
+        sequence=await repository.next_sequence(conversation.id),
         role=MessageRole.ASSISTANT,
         content=answer.text,
-        language=result.trace.detected_language,
+        # Detected from the answer, not the query. The extractive answer is
+        # composed from evidence that may be in a different language than the
+        # question, and an abstention is a fixed English refusal — labelling
+        # either with the query's language would make the stored provenance
+        # describe something other than the content it sits on.
+        language=detect_language(answer.text).language.value,
         answer_status=_persisted_status(answer.outcome),
         decision=_persisted_decision(answer.decision),
         decision_reason=answer.decision_reason or None,

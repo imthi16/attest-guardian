@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,7 +47,11 @@ class Conversation(WorkspaceOwnedModel):
     messages: Mapped[list["Message"]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",
-        order_by="Message.created_at",
+        # Ordered by the explicit turn sequence, not by timestamp: a question and
+        # its answer are written close together and `now()` is transaction-start
+        # time in PostgreSQL, so timestamps can tie and SQL would then be free to
+        # return the answer before the question that produced it.
+        order_by="Message.sequence",
     )
 
 
@@ -67,12 +72,17 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
             name="confidence_range",
         ),
+        UniqueConstraint("conversation_id", "sequence"),
     )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"),
         index=True,
     )
+    # Position within the thread. Explicit because `created_at` cannot order
+    # turns written in one transaction: PostgreSQL's `now()` is transaction-start
+    # time, so a question and its answer tie on it.
+    sequence: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     role: Mapped[MessageRole] = mapped_column(pg_enum(MessageRole, "message_role"))
     content: Mapped[str] = mapped_column(Text)
     normalized_content: Mapped[str | None] = mapped_column(Text)

@@ -50,14 +50,22 @@ describe("workspace role mirror", () => {
   });
 
   it("matches the API capability matrix", () => {
-    // Owners and admins hold every action; members lose member management;
-    // viewers additionally lose uploads. Asserted against the source so a
-    // change to `_ROLE_ACTIONS` cannot pass unnoticed.
+    // Owners and admins hold every action; members lose member management and
+    // conversation management; viewers additionally lose uploads and writing to
+    // a thread at all. Asserted against the source so a change to
+    // `_ROLE_ACTIONS` cannot pass unnoticed. The member set is matched action by
+    // action rather than as one literal so reformatting the Python does not
+    // break the check while a capability change still does.
     expect(permissionsSource).toContain("MembershipRole.OWNER: frozenset(WorkspaceAction)");
     expect(permissionsSource).toContain("MembershipRole.ADMIN: frozenset(WorkspaceAction)");
-    expect(permissionsSource).toMatch(
-      /MembershipRole\.MEMBER: frozenset\(\s*\{WorkspaceAction\.VIEW, WorkspaceAction\.QUERY, WorkspaceAction\.UPLOAD_DOCUMENTS\}\s*\)/,
+    const memberBlock = /MembershipRole\.MEMBER: frozenset\(\s*\{([^}]*)\}\s*\)/.exec(
+      permissionsSource,
     );
+    expect(memberBlock).not.toBeNull();
+    const memberActions = [...(memberBlock?.[1] ?? "").matchAll(/WorkspaceAction\.([A-Z_]+)/g)].map(
+      (match) => match[1],
+    );
+    expect(memberActions.sort()).toEqual(["CONVERSE", "QUERY", "UPLOAD_DOCUMENTS", "VIEW"]);
     expect(permissionsSource).toContain(
       "MembershipRole.VIEWER: frozenset({WorkspaceAction.VIEW, WorkspaceAction.QUERY})",
     );
@@ -68,6 +76,12 @@ describe("workspace role mirror", () => {
     }
     expect(allows("member", "uploadDocuments")).toBe(true);
     expect(allows("viewer", "uploadDocuments")).toBe(false);
+    // `query` is the read-only right to ask; writing a thread, recording
+    // feedback, and deleting history are not covered by it.
+    expect(allows("member", "converse")).toBe(true);
+    expect(allows("viewer", "converse")).toBe(false);
+    expect(allows("member", "manageConversations")).toBe(false);
+    expect(allows("admin", "manageConversations")).toBe(true);
     expect(allows("owner", "manageMembers")).toBe(true);
     expect(allows("admin", "manageMembers")).toBe(true);
     expect(allows("member", "manageMembers")).toBe(false);

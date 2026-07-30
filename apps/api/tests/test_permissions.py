@@ -7,6 +7,8 @@ from app.db.models.enums import MembershipRole
 FULL = {
     WorkspaceAction.VIEW,
     WorkspaceAction.QUERY,
+    WorkspaceAction.CONVERSE,
+    WorkspaceAction.MANAGE_CONVERSATIONS,
     WorkspaceAction.UPLOAD_DOCUMENTS,
     WorkspaceAction.MANAGE_DOCUMENTS,
     WorkspaceAction.MANAGE_MEMBERS,
@@ -18,8 +20,12 @@ EXPECTED_MATRIX = {
     MembershipRole.MEMBER: {
         WorkspaceAction.VIEW,
         WorkspaceAction.QUERY,
+        WorkspaceAction.CONVERSE,
         WorkspaceAction.UPLOAD_DOCUMENTS,
     },
+    # A viewer reads and asks. `QUERY` is the read-only right to get an answer;
+    # it must not carry `CONVERSE`, or "changes nothing" would include writing
+    # threads, recording feedback, and deleting answer history.
     MembershipRole.VIEWER: {WorkspaceAction.VIEW, WorkspaceAction.QUERY},
 }
 

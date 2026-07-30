@@ -141,13 +141,23 @@ provenance lives. The stored `verifier` is the one the trace says actually ran,
 not a constant, since a verdict attributed to the wrong verifier is not audit
 evidence.
 
-Ordering is deliberate. The question is persisted *before* the pipeline runs and
-is kept even when the run fails: a question that failed is still something
-someone asked, and hiding it would make the thread lie about what happened. The
-answer is persisted only from a terminal result, so a failed or abandoned run
-never leaves an assistant turn implying an answer existed. An abstention is
-recorded like any other outcome — it is a real answer about the state of the
-evidence.
+A turn is atomic. The question is written before the pipeline runs and the answer
+only from a terminal result, so a completed run stores both and a failed or
+abandoned one stores neither — the request's transaction rolls back together.
+That means a failed question does not linger in the thread; the alternative,
+committing the question separately so it survives, was considered and rejected,
+because a half-turn is harder to reason about than no turn and the separate
+transaction would escape the request's rollback in tests too. An abstention is
+*not* a failure: it is a real answer about the state of the evidence and is
+recorded like any other outcome.
+
+Turn order is a recorded fact, not an inference. `messages.sequence` (migration
+`0014`) is assigned while holding the conversation's row lock, because a question
+and its answer are written in one transaction and PostgreSQL's `now()` is
+transaction-start time — ordering by `created_at` alone would let SQL return the
+answer before the question. The same lock serializes sequence assignment against
+a concurrent turn and is the row whose `updated_at` is bumped, which is what
+makes "most recently updated first" reflect activity rather than creation order.
 
 Two routes ask the same question:
 
@@ -157,7 +167,28 @@ Two routes ask the same question:
 | `POST .../conversations/{id}/messages/stream` | Server-Sent Events |
 
 Both assemble the identical pipeline through the identical gates, so a client
-cannot obtain a less-checked answer by choosing the streaming route. Stage events
+cannot obtain a less-checked answer by choosing the streaming route.
+
+Capabilities split reads from writes. `QUERY` is the read-only right to ask a
+question and read the answer, which is why a viewer holds it and why it does
+*not* cover conversations: writing a thread, recording feedback, and deleting
+answer history are changes to workspace state, so they require `CONVERSE`
+(members and up). Deletion additionally requires being the thread's author or
+holding `MANAGE_CONVERSATIONS` (owners and admins), and is audited before the
+cascade — afterwards the audit event is the only remaining record that the
+history existed and who removed it. A viewer keeps the one-shot `/answer`
+endpoint, which persists nothing.
+
+Feedback is written with `ON CONFLICT DO UPDATE` rather than read-then-write, so
+two concurrent first-time submissions cannot both insert and turn one into a 500
+on an endpoint that promises idempotent revision. It is accepted only on
+assistant turns: rating one's own question would create rows the model's
+semantics do not cover and contaminate evaluation data.
+
+A streamed failure logs the exception *type* only. A database or provider error
+commonly carries bound parameters — the user's raw or normalized query, and
+potentially evidence text — so the message and traceback are exactly what must
+not reach the logs. Stage events
 come from LangGraph's own update stream (`RagGraph.run_streaming`), not announced
 around the call, so a client showing "retrieving" is seeing that the retrieve
 node actually finished. The answer arrives in exactly one `answer` event at the

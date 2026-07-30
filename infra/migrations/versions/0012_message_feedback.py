@@ -91,6 +91,10 @@ def upgrade() -> None:
         ["workspace_id"],
     )
     op.execute("ALTER TABLE message_feedback ENABLE ROW LEVEL SECURITY")
+    # FORCE as well as ENABLE: PostgreSQL exempts a table's *owner* from a merely
+    # enabled policy, and the runtime role owns this table, so without FORCE the
+    # isolation claim above would not hold for the role that actually queries it.
+    op.execute("ALTER TABLE message_feedback FORCE ROW LEVEL SECURITY")
     op.execute(
         "CREATE POLICY message_feedback_workspace_isolation ON message_feedback "
         f"USING ({_PREDICATE}) WITH CHECK ({_PREDICATE})"
@@ -98,6 +102,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE message_feedback NO FORCE ROW LEVEL SECURITY")
     op.execute("DROP POLICY IF EXISTS message_feedback_workspace_isolation ON message_feedback")
     op.drop_index(op.f("ix_message_feedback_workspace_id"), table_name="message_feedback")
     op.drop_index(op.f("ix_message_feedback_message_id"), table_name="message_feedback")

@@ -19,6 +19,7 @@ from app.db.models.conversations import Message, MessageFeedback
 from app.db.models.documents import Chunk
 from app.db.models.enums import DocumentStatus, MessageRole
 from app.db.models.identity import User, Workspace
+from app.db.models.operations import AuditLog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -414,3 +415,185 @@ async def test_listing_shows_a_workspace_own_threads_newest_first(
     assert listed.status_code == 200, listed.text
     ids = [entry["id"] for entry in listed.json()]
     assert set(ids) == {first, second}
+
+
+async def enroll(
+    client: httpx.AsyncClient,
+    owner: Account,
+    workspace_id: str,
+    invitee: Account,
+    role: str,
+) -> None:
+    added = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/members",
+        json={"email": invitee.email, "role": role},
+        headers=owner.headers,
+    )
+    assert added.status_code == 201, added.text
+
+
+async def test_a_viewer_can_read_a_thread_but_never_write_one(
+    client: httpx.AsyncClient,
+) -> None:
+    """`QUERY` is the read-only right to ask; it must not cover writing.
+
+    A viewer's documented contract is "changes nothing". Writing a durable
+    thread, recording feedback, and deleting answer history are all changes, so
+    they need `CONVERSE` — otherwise a read-only role could destroy another
+    member's evidence-backed history.
+    """
+    owner = await make_account(client, "c-v-owner@example.com")
+    viewer = await make_account(client, "c-v-viewer@example.com")
+    workspace_id = await make_workspace(client, owner)
+    await enroll(client, owner, workspace_id, viewer, "viewer")
+    conversation_id = await start_conversation(client, owner, workspace_id)
+
+    base = f"/api/v1/workspaces/{workspace_id}/conversations"
+    # Reading is allowed: the answers are drawn from documents they may read.
+    assert (await client.get(base, headers=viewer.headers)).status_code == 200
+    assert (
+        await client.get(f"{base}/{conversation_id}", headers=viewer.headers)
+    ).status_code == 200
+
+    refused_create = await client.post(base, json={"title": "mine"}, headers=viewer.headers)
+    assert refused_create.status_code == 403
+    assert error_code(refused_create) == "insufficient_role"
+
+    refused_ask = await client.post(
+        f"{base}/{conversation_id}/messages",
+        json={"question": "anything"},
+        headers=viewer.headers,
+    )
+    assert refused_ask.status_code == 403
+
+    refused_delete = await client.delete(f"{base}/{conversation_id}", headers=viewer.headers)
+    assert refused_delete.status_code == 403
+
+    # The one-shot answer endpoint stays open to them: asking without persisting
+    # is exactly what `QUERY` is for.
+    assert (
+        await client.post(
+            f"/api/v1/workspaces/{workspace_id}/answer",
+            json={"query": "anything"},
+            headers=viewer.headers,
+        )
+    ).status_code == 200
+
+
+async def test_only_the_author_or_an_admin_may_delete_a_thread(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A member must not be able to destroy a colleague's answer history."""
+    owner = await make_account(client, "c-d-owner@example.com")
+    member = await make_account(client, "c-d-member@example.com")
+    workspace_id = await make_workspace(client, owner)
+    await enroll(client, owner, workspace_id, member, "member")
+
+    base = f"/api/v1/workspaces/{workspace_id}/conversations"
+    owners_thread = await start_conversation(client, owner, workspace_id)
+
+    refused = await client.delete(f"{base}/{owners_thread}", headers=member.headers)
+    assert refused.status_code == 403
+    assert error_code(refused) == "insufficient_role"
+
+    # Their own thread they may delete.
+    created = await client.post(base, json={"title": "mine"}, headers=member.headers)
+    assert created.status_code == 201, created.text
+    own = created.json()["id"]
+    assert (await client.delete(f"{base}/{own}", headers=member.headers)).status_code == 204
+
+    # An admin may remove anyone's, and it is attributable afterwards.
+    deleted = await client.delete(f"{base}/{owners_thread}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+    logged = (
+        await db_session.scalars(
+            select(AuditLog).where(
+                AuditLog.action == "conversation.deleted",
+                AuditLog.resource_id == uuid.UUID(owners_thread),
+            )
+        )
+    ).all()
+    # The rows are cascaded away, so the audit event is the only remaining record.
+    assert len(logged) == 1
+    assert logged[0].actor_user_id is not None
+
+
+async def test_feedback_is_only_accepted_on_an_answer(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Rating your own question would contaminate reviewer-feedback data."""
+    owner = await make_account(client, "c-fb-role@example.com")
+    workspace_id = await make_workspace(client, owner)
+    conversation_id = await start_conversation(client, owner, workspace_id)
+    await client.post(
+        f"/api/v1/workspaces/{workspace_id}/conversations/{conversation_id}/messages",
+        json={"question": "anything at all"},
+        headers=owner.headers,
+    )
+    question = (
+        await db_session.scalars(select(Message).where(Message.role == MessageRole.USER))
+    ).one()
+
+    refused = await client.put(
+        f"/api/v1/workspaces/{workspace_id}/conversations/{conversation_id}"
+        f"/messages/{question.id}/feedback",
+        json={"rating": "helpful"},
+        headers=owner.headers,
+    )
+    assert refused.status_code == 409
+    assert error_code(refused) == "feedback_requires_answer"
+    assert await db_session.scalar(select(func.count()).select_from(MessageFeedback)) == 0
+
+
+async def test_turns_keep_their_order_and_the_thread_moves_to_the_top(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Order must be recorded, not inferred from timestamps that can tie.
+
+    A question and its answer are written close together, and `now()` is
+    transaction-start time in PostgreSQL, so ordering by `created_at` alone lets
+    SQL return the answer before the question. The thread must also rise in the
+    list when it gains a turn, which inserting a message alone does not do.
+    """
+    owner = await make_account(client, "c-order@example.com")
+    workspace_id = await make_workspace(client, owner)
+    base = f"/api/v1/workspaces/{workspace_id}/conversations"
+    first = await start_conversation(client, owner, workspace_id)
+    second = await start_conversation(client, owner, workspace_id)
+
+    for question in ("first question", "second question"):
+        asked = await client.post(
+            f"{base}/{first}/messages", json={"question": question}, headers=owner.headers
+        )
+        assert asked.status_code == 200, asked.text
+        # The persisted id travels with the answer so feedback can be attached
+        # without reloading the thread.
+        assert asked.json()["message_id"]
+
+    detail = await client.get(f"{base}/{first}", headers=owner.headers)
+    messages = detail.json()["messages"]
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert [message["content"] for message in messages][0] == "first question"
+    assert [message["content"] for message in messages][2] == "second question"
+
+    sequences = (
+        await db_session.scalars(
+            select(Message.sequence)
+            .where(Message.conversation_id == uuid.UUID(first))
+            .order_by(Message.sequence)
+        )
+    ).all()
+    assert list(sequences) == [0, 1, 2, 3]
+
+    # The thread that just gained turns is listed ahead of the untouched one.
+    listed = await client.get(base, headers=owner.headers)
+    assert [entry["id"] for entry in listed.json()][0] == first
+    assert second in [entry["id"] for entry in listed.json()]

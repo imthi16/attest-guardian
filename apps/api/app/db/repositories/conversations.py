@@ -10,8 +10,10 @@ load one is to prove the owning conversation belongs to this workspace first.
 
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
 from app.db.models.conversations import (
@@ -21,6 +23,7 @@ from app.db.models.conversations import (
     MessageFeedback,
     VerificationResult,
 )
+from app.db.models.enums import FeedbackRating
 from app.db.repositories.base import Repository, WorkspaceScopedRepository
 
 
@@ -36,6 +39,45 @@ class ConversationRepository(WorkspaceScopedRepository[Conversation]):
         )
         result = await self._session.scalars(statement)
         return result.all()
+
+    async def get_for_update(self, conversation_id: uuid.UUID) -> Conversation | None:
+        """Load a conversation holding its row lock for the rest of the transaction.
+
+        Adding a turn takes this lock: it serializes assignment of the next
+        `sequence` (two concurrent turns would otherwise compute the same number
+        and collide on the unique constraint) and it is the row whose
+        `updated_at` has to move so the thread list reflects recent activity.
+        """
+        statement = (
+            select(Conversation)
+            .where(
+                Conversation.id == conversation_id,
+                Conversation.workspace_id == self.workspace_id,
+            )
+            .with_for_update()
+        )
+        result = await self._session.scalars(statement)
+        return result.first()
+
+    async def next_sequence(self, conversation_id: uuid.UUID) -> int:
+        """The next turn position. Call while holding the conversation's lock."""
+        statement = select(func.coalesce(func.max(Message.sequence), -1) + 1).where(
+            Message.conversation_id == conversation_id
+        )
+        return await self._session.scalar(statement) or 0
+
+    async def count_messages(self, conversation_id: uuid.UUID) -> int:
+        """How many turns a thread holds, for the deletion audit detail."""
+        statement = (
+            select(func.count())
+            .select_from(Message)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Conversation.workspace_id == self.workspace_id,
+            )
+        )
+        return await self._session.scalar(statement) or 0
 
     async def get_with_messages(self, conversation_id: uuid.UUID) -> Conversation | None:
         """Load a conversation and its turns, with citations and claims attached.
@@ -92,11 +134,26 @@ class MessageRepository(Repository[Message]):
         result = await self._session.scalars(statement)
         return result.first()
 
-    async def list_for_conversation(self, conversation_id: uuid.UUID) -> Sequence[Message]:
+    async def list_for_conversation(
+        self,
+        conversation_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+    ) -> Sequence[Message]:
+        """Turns of one conversation, oldest first, fenced by workspace.
+
+        The workspace is a required argument and enforced in the query: this
+        repository is the tenant boundary, so accepting a bare conversation id
+        would hand another tenant's questions, answers, and citations to any
+        caller that guessed one.
+        """
         statement = (
             select(Message)
-            .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Conversation.workspace_id == workspace_id,
+            )
+            .order_by(Message.sequence, Message.created_at)
             .options(
                 selectinload(Message.citations).selectinload(Citation.chunk),
                 selectinload(Message.verification_results),
@@ -116,6 +173,47 @@ class VerificationResultRepository(Repository[VerificationResult]):
 
 class MessageFeedbackRepository(WorkspaceScopedRepository[MessageFeedback]):
     model = MessageFeedback
+
+    async def upsert(
+        self,
+        *,
+        message_id: uuid.UUID,
+        reviewer_id: uuid.UUID,
+        rating: FeedbackRating,
+        note: str | None,
+    ) -> MessageFeedback:
+        """Record or revise this reviewer's verdict in one statement.
+
+        `ON CONFLICT DO UPDATE` rather than read-then-write: two concurrent
+        first-time submissions would both see no existing row and both insert,
+        and the unique `(message_id, reviewer_id)` constraint would turn one of
+        them into a 500 on an endpoint that promises idempotent revision.
+
+        `updated_at` is set explicitly because `onupdate` only fires on an ORM
+        flush, not on a conflict resolved inside the database.
+        """
+        now = datetime.now(UTC)
+        statement = (
+            pg_insert(MessageFeedback)
+            .values(
+                workspace_id=self.workspace_id,
+                message_id=message_id,
+                reviewer_id=reviewer_id,
+                rating=rating,
+                note=note,
+            )
+            .on_conflict_do_update(
+                index_elements=[MessageFeedback.message_id, MessageFeedback.reviewer_id],
+                set_={"rating": rating, "note": note, "updated_at": now},
+            )
+            .returning(MessageFeedback)
+        )
+        result = await self._session.scalars(statement)
+        feedback = result.one()
+        # The row was written by a statement rather than through the identity
+        # map, so refresh before anything reads server-generated columns.
+        await self._session.refresh(feedback)
+        return feedback
 
     async def get_for_reviewer(
         self,

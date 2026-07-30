@@ -183,6 +183,15 @@ def conversation_not_found() -> HTTPException:
     )
 
 
+def feedback_requires_answer() -> HTTPException:
+    """Feedback is a verdict on an answer, not on the asker's own question."""
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "feedback_requires_answer",
+        "Feedback can only be recorded for an answer.",
+    )
+
+
 def message_not_found() -> HTTPException:
     return _error(
         status.HTTP_404_NOT_FOUND,

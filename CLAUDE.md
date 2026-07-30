@@ -166,7 +166,18 @@ Repository layout and intended ownership per directory:
   because extractive generation has no partial text safe to display. Both routes
   build the identical pipeline, so streaming is never a less-checked path.
   Reviewer feedback (`message_feedback`, migration `0012`) is unique per
-  (message, reviewer), so it is a `PUT` that revises rather than accumulates.
+  (message, reviewer), so it is a `PUT` that revises rather than accumulates —
+  written with `ON CONFLICT DO UPDATE`, and accepted only on assistant turns.
+  `QUERY` is read-only and deliberately does **not** cover conversations:
+  writing a thread, feedback, and deletion need `CONVERSE` (members and up), and
+  deletion also requires authorship or `MANAGE_CONVERSATIONS` (owners/admins) and
+  is audited before the cascade. A turn is atomic — question and answer share the
+  request transaction, so a failed run stores neither. `messages.sequence`
+  (migration `0014`) orders turns, assigned under the conversation's row lock,
+  because a question and its answer tie on `created_at` (`now()` is
+  transaction-start time); that lock also bumps `conversations.updated_at`. A
+  streamed failure logs the exception *type* only — driver errors carry bound
+  parameters including the raw query.
 - `apps/web` — Next.js (App Router) + TypeScript, React 19. Strict TypeScript, strict ESLint
   (`--max-warnings=0`). Backend-for-frontend: tokens live only in `httpOnly` cookies and all
   API calls run in server code (`lib/api-client.ts` → `lib/session.ts` → `lib/attest-api.ts`,

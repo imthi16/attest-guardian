@@ -8,6 +8,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.db.models.conversations import Conversation, Message, MessageFeedback
+from app.rag.types import RagResult
+from app.schemas.answer import AnswerResponse
 
 
 class ConversationCreateRequest(BaseModel):
@@ -145,6 +147,23 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     document_id: uuid.UUID | None = None
     top_k: int | None = Field(default=None, ge=1)
+
+
+class ConversationAnswerResponse(AnswerResponse):
+    """An answer plus the id of the turn it was stored as.
+
+    Feedback is addressed by message id, so a client that asked over JSON needs
+    it here; otherwise it would have to reload the thread and guess which
+    assistant turn corresponds to its own request, which stops being reliable as
+    soon as two questions are in flight.
+    """
+
+    message_id: uuid.UUID
+
+    @classmethod
+    def of(cls, result: RagResult, *, message_id: uuid.UUID) -> ConversationAnswerResponse:
+        base = AnswerResponse.from_result(result)
+        return cls(**base.model_dump(), message_id=message_id)
 
 
 class FeedbackRequest(BaseModel):
