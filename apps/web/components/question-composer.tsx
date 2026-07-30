@@ -184,12 +184,18 @@ export function QuestionComposer({ conversationId, workspaceId }: QuestionCompos
       return;
     }
     if (!answered) {
-      // The question is kept in the box: it was recorded but never answered, and
-      // clearing it would leave the asker with no way to retry what they typed.
+      // Genuinely ambiguous, and it is reported as such. The stream may have
+      // been cut before the pipeline finished, in which case only the question
+      // was stored — or after the answer was committed but before the frame
+      // carrying it was forwarded, in which case the thread below now holds it.
+      // Telling the asker to ask again would invite a duplicate question in the
+      // second case, so the thread is refreshed and they are pointed at it.
+      // The question stays in the box either way, so retrying costs no retyping.
       setState({
         code: clientErrorCodes.network,
         kind: "failed",
-        message: "The connection closed before an answer arrived. Please ask again.",
+        message:
+          "The connection closed before the answer reached this page. The thread below has been reloaded — if the answer is not there, ask again.",
       });
       router.refresh();
       return;

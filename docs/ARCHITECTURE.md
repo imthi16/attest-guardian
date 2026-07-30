@@ -140,6 +140,15 @@ another. That failure is worse than a missing citation — the evidence looks
 proven and supports a different statement — so the association is stored rather
 than inferred, and the unique constraint stops one claim collecting two.
 
+The migration backfills existing rows by matching the verdict written beside each
+citation on `(message_id, claim_text)`, which is the association itself. Row order
+is deliberately not used: the two rows of a turn are written in one transaction
+and share `created_at`, and `id` is a random UUID, so ordering by either would
+invent a pairing rather than recover one. A citation whose verdict row is gone is
+parked above every index its message uses instead of defaulting onto claim zero —
+claim zero is a real statement, and attaching unmatched evidence to it would be
+the very defect the column prevents.
+
 A persisted citation carries `document_version_id` alongside its `chunk_id`,
 because resolving a citation requires it. Without that, the evidence behind an
 answer would be reachable only while the response that produced it was still on
@@ -227,11 +236,18 @@ thread and an explanation rather than a composer. The API re-authorizes regardle
 
 Asking posts to a route handler rather than a server action, because an action returns once
 and cannot report progress. The handler verifies `Origin` (as the upload relay does, and for
-the same `SameSite=Lax` reason), bounds the request body by `Content-Length` *before*
-`request.json()` — which buffers the whole body, so a length check inside the parsed object
-is not a memory bound and a forged `Origin` reaches that line without a session — bounds the
-question length, and pipes the API's events through untouched; re-encoding them would risk
-the relay disagreeing with the API about what the answer was.
+the same `SameSite=Lax` reason), reads the request body under a byte cap — `request.json()`
+buffers the whole thing, so a length check inside the parsed object is not a memory bound and
+a forged `Origin` reaches that line without a session — bounds the question length, and pipes
+the API's events through untouched; re-encoding them would risk the relay disagreeing with
+the API about what the answer was.
+
+The cap counts bytes as they arrive rather than trusting `Content-Length`. That header is
+optional — a proxy forwarding over HTTP/2 or with chunked transfer encoding delimits the body
+without it — and this route exists to work behind a proxy, so refusing a headerless request
+would reject every question in such a deployment. It is still honoured as a cheap pre-filter,
+because an obviously oversized request should cost nothing to reject; a body that then
+exceeds the cap has its stream cancelled rather than drained.
 
 Progress is real: the labels in `lib/answer-stages.ts` map LangGraph node names, so
 "Searching your documents…" means the retrieve node finished. The **answer is not streamed
@@ -245,8 +261,14 @@ Success is the arrival of an `answer` event, never the end of the response body.
 means the question was accepted, and the API persists the user turn before the pipeline
 runs, so a proxy that closes the stream cleanly after only stage events ends the read loop
 normally with nothing but the question stored. Treating that as success would tell the asker
-an answer exists when the thread holds none, so it is reported as a failure with the
-question left in the box to ask again.
+an answer exists when the thread holds none.
+
+The outcome is reported as genuinely uncertain rather than as a plain failure, because the
+cut may equally have come *after* the answer was committed and before the frame carrying it
+was forwarded. The thread is refreshed and the reader is pointed at it — "if the answer is
+not there, ask again" — since telling them to retry unconditionally would invite a duplicate
+question and a duplicate answer. The question stays in the composer either way, so retrying
+costs no retyping.
 
 Every outcome has explicit wording in `components/answer-state.tsx`, keyed on the
 *decision* rather than the status: three decisions all report `abstained`, and telling them

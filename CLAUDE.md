@@ -197,13 +197,16 @@ Repository layout and intended ownership per directory:
   and `.../conversations/[conversationId]/stream` (an action returns once and cannot report
   progress). Route handlers get none of a server action's built-in protection, so every relay
   verifies `Origin` against `X-Forwarded-Host`/`Host` (`SameSite=Lax` is per-site, not
-  per-origin); every relay also bounds `Content-Length` *before* reading the body, because
-  `request.formData()`/`request.json()` buffer the whole thing before any check inside it can
-  run. The chat UI consumes SSE stage events for progress only — the
+  per-origin); every relay also caps the request body *before* buffering it, because
+  `request.formData()`/`request.json()` read the whole thing before any check inside it can
+  run — the stream relay counts bytes as it reads rather than requiring `Content-Length`,
+  which HTTP/2 and chunked transfer omit. The chat UI consumes SSE stage events for progress only — the
   answer arrives in one event and the page then `router.refresh()`es, so the server-rendered
   thread rather than client state is what a reader sees; a stream that ends without an
-  `answer` event is a failure, not a success, since a 200 only means the question was
-  accepted. The evidence panel renders
+  `answer` event is never a success (a 200 only means the question was accepted) but is
+  reported as *uncertain* rather than failed — the cut may have come after the answer
+  committed, so the page refreshes and points at the thread instead of telling the asker to
+  repeat a question that may already be answered. The evidence panel renders
   `supporting_text` from `/citations/resolve`, never the quote the answer supplied, and
   resolves on open because resolution is audited. That field *is* the proven quote
   (`content[start:end]`), so the whole of it is highlighted — `page_quote_char_*` locates it

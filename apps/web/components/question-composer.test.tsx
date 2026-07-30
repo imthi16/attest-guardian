@@ -208,6 +208,10 @@ describe("QuestionComposer", () => {
     // response cleanly after only stage events, the read loop ends normally
     // while the API has persisted the question and nothing else — reporting
     // success there would leave the asker believing an answer exists.
+    //
+    // The outcome is genuinely ambiguous: the cut may also have come *after* the
+    // answer was committed, so the wording points at the reloaded thread rather
+    // than telling the asker to repeat a question that may already be answered.
     vi.stubGlobal(
       "fetch",
       vi
@@ -220,9 +224,11 @@ describe("QuestionComposer", () => {
 
     await ask("When is payment due?");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The connection closed before an answer arrived",
-    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("closed before the answer reached this page");
+    expect(alert).toHaveTextContent("if the answer is not there, ask again");
+    // The thread is reloaded, because the answer may already be in it.
+    expect(refresh).toHaveBeenCalled();
     // The question stays in the box so it can be asked again as typed.
     expect(screen.getByLabelText(/Ask a question/)).toHaveValue("When is payment due?");
   });

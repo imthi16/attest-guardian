@@ -4,6 +4,7 @@ import asyncio
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import asyncpg
@@ -86,5 +87,35 @@ async def scalar(database_url: str, query: str) -> int:
         value = await connection.fetchval(query)
         assert isinstance(value, int)
         return value
+    finally:
+        await connection.close()
+
+
+Statement = tuple[str, Sequence[object]]
+
+
+async def run_sql(database_url: str, statements: Sequence[Statement]) -> None:
+    """Execute `(sql, parameters)` pairs on one direct asyncpg connection.
+
+    For seeding a schema at an intermediate revision, where the ORM models —
+    which describe `head` — cannot write rows to a table that does not have its
+    columns yet. One connection for the batch, so a session-level `set_config`
+    in the first statement still applies to the rest.
+    """
+    dsn = make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
+    connection = await asyncpg.connect(dsn)
+    try:
+        for sql, parameters in statements:
+            await connection.execute(sql, *parameters)
+    finally:
+        await connection.close()
+
+
+async def rows(database_url: str, query: str, *parameters: object) -> list[dict[str, object]]:
+    """Fetch every row of a query as dictionaries."""
+    dsn = make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
+    connection = await asyncpg.connect(dsn)
+    try:
+        return [dict(record) for record in await connection.fetch(query, *parameters)]
     finally:
         await connection.close()
