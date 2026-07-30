@@ -1,0 +1,10 @@
+{
+  "datasets": {
+    "corpus.json": "46ee986fcbb010031400344f7925efeebc421f7cf8b233f6ec405d5cf8291dfe",
+    "injection.json": "7e40ab6b3729c39cecd2cf9d66c7e782cb198a26330809b41b077c471f54a821",
+    "queries.json": "bb2d731efc3f3ee5649775aa8c1d6c60726606f520f9ba9782099e95f1818b41",
+    "tenant_isolation.json": "50536017a66a0b44b62ae20660f10641edf129337454d3173a737efb3b3a12a4"
+  },
+  "description": "Version and content digests for the evaluation datasets. Loading verifies each digest, so editing a dataset fails the suite until this file is refreshed on purpose (python -m app.evaluation.datasets --refresh). The point is that tuning the data until a threshold passes shows up in a diff.",
+  "version": "2026-07-v1"
+}

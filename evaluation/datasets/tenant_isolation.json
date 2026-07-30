@@ -1,0 +1,41 @@
+{
+  "version": "2026-07-v1",
+  "description": "Cross-tenant probes. Each case is a reader in one workspace asking a question whose best match sits in another workspace's corpus. The passages are written to contradict their counterparts — thirty days against sixty, ninety against thirty, monthly against weekly — so a leak is detectable in the answer text itself rather than only in an identifier. Nothing here labels an expected leak: whether one occurred is measured from behaviour.",
+  "cases": [
+    {
+      "case_id": "iso-invoice",
+      "reader_workspace": "alpha",
+      "target_chunk_id": "beta-invoice-terms",
+      "query": "invoice payment due within sixty days of receipt",
+      "note": "Query worded to match the other tenant's passage almost exactly"
+    },
+    {
+      "case_id": "iso-notice",
+      "reader_workspace": "alpha",
+      "target_chunk_id": "beta-notice-period",
+      "query": "terminate this agreement with thirty days written notice",
+      "note": "Both workspaces hold a termination clause; only the reader's own may be used"
+    },
+    {
+      "case_id": "iso-leave",
+      "reader_workspace": "alpha",
+      "target_chunk_id": "beta-leave-accrual",
+      "query": "annual leave accrues weekly and does not carry over",
+      "note": "Verbatim text of the other tenant's passage, used as the query"
+    },
+    {
+      "case_id": "iso-reverse-invoice",
+      "reader_workspace": "beta",
+      "target_chunk_id": "alpha-invoice-terms",
+      "query": "invoice payment due within thirty days of receipt",
+      "note": "The same probe in the opposite direction, so isolation is not one-way"
+    },
+    {
+      "case_id": "iso-reverse-warranty",
+      "reader_workspace": "beta",
+      "target_chunk_id": "alpha-warranty-scanned",
+      "query": "warranty covers manufacturing defects for twenty-four months",
+      "note": "A scanned page in the other tenant's workspace is no more reachable than a born-digital one"
+    }
+  ]
+}

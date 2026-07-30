@@ -66,6 +66,12 @@ jobs:
       - run: ruff check app tests
       - run: mypy
       - run: pytest
+      # Prints the measured report alongside the pass/fail verdict, so a
+      # regression shows the number it regressed to rather than only that a
+      # threshold failed. Offline and free: no tenant document and no paid
+      # service is reachable from here.
+      - name: Evaluate the answer pipeline against the versioned datasets
+        run: python -m app.evaluation.report
 
   web:
     name: Web quality
