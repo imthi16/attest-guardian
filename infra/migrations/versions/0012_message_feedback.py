@@ -24,18 +24,17 @@ _PREDICATE = "workspace_id = NULLIF(current_setting('app.workspace_id', true), '
 
 
 def upgrade() -> None:
-    feedback_rating = sa.Enum(
-        "helpful",
-        "unhelpful",
-        "incorrect",
-        name="feedback_rating",
-    )
-    feedback_rating.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "message_feedback",
         sa.Column("message_id", sa.Uuid(), nullable=False),
         sa.Column("reviewer_id", sa.Uuid(), nullable=False),
-        sa.Column("rating", feedback_rating, nullable=False),
+        # `create_table` creates the enum type itself, as in migration 0001;
+        # pre-creating it here as well would fail with "type already exists".
+        sa.Column(
+            "rating",
+            sa.Enum("helpful", "unhelpful", "incorrect", name="feedback_rating"),
+            nullable=False,
+        ),
         sa.Column("note", sa.Text(), nullable=True),
         sa.Column("workspace_id", sa.Uuid(), nullable=False),
         sa.Column(
