@@ -13,9 +13,13 @@
  * the API audits each resolution; resolving citations nobody looked at would
  * make the audit log describe reading that never happened.
  *
+ * What is shown is exactly the proven passage. The resolver returns the text it
+ * read back at the validated offsets, so the whole of it is the quote; the page
+ * offsets locate that passage inside its page and are stated as a locator rather
+ * than used to highlight part of it.
+ *
  * Document titles, section names, and evidence text all originate in uploaded
- * files. They are rendered as text children only, and the highlight is built by
- * slicing the string — never by injecting markup.
+ * files. They are rendered as text children only — never by injecting markup.
  */
 import { useState } from "react";
 
@@ -36,25 +40,44 @@ type PanelState =
   | Readonly<{ kind: "open"; resolution: Extract<CitationResolution, { ok: true }> }>;
 
 /**
- * Split the surrounding text into before / quote / after at the page offsets.
+ * Where the passage sits in its page, as a locator a reader can act on.
  *
- * Falls back to showing the passage unhighlighted if the offsets do not describe
- * a slice of this text. A wrong highlight would misrepresent which words the
- * citation actually covers, and that is worse than no highlight.
+ * The offsets are positions in the full page text, not in `supporting_text` —
+ * that field is the proven quote and nothing more — so they are stated rather
+ * than used to slice it. Returns `null` when there is no page to locate it in.
  */
-export function splitForHighlight(
-  text: string,
+export function describeLocation(
+  pageNumber: number | null,
   start: number,
   end: number,
-): Readonly<{ after: string; before: string; quote: string }> {
-  if (start < 0 || end > text.length || start >= end) {
-    return { after: "", before: "", quote: text };
+): string | null {
+  if (pageNumber === null || start < 0 || end <= start) {
+    return null;
   }
-  return {
-    after: text.slice(end),
-    before: text.slice(0, start),
-    quote: text.slice(start, end),
-  };
+  return `Page ${pageNumber}, characters ${start + 1}–${end}`;
+}
+
+/**
+ * How much the reading of this passage can be trusted, in words.
+ *
+ * Born-digital text is read exactly; OCR text is worth its recorded confidence,
+ * and OCR text with *no* recorded confidence is of unknown reliability — which
+ * must never be presented as if it were a good reading.
+ */
+export function describeReliability(
+  ocrEngine: string | null,
+  ocrConfidence: number | null,
+  supportScore: number | null,
+): string | null {
+  if (ocrEngine === null) {
+    return null;
+  }
+  if (ocrConfidence === null || supportScore === null) {
+    return `Read by OCR (${ocrEngine}); the engine recorded no confidence, so how well it read this passage is unknown.`;
+  }
+  const percent = `${Math.round(supportScore * 100)}%`;
+  const band = supportScore >= 0.9 ? "high" : supportScore >= 0.7 ? "moderate" : "low";
+  return `Read by OCR (${ocrEngine}) with ${band} confidence (${percent}). Check the page image before relying on exact figures.`;
 }
 
 export function EvidencePanel({ citation, index, workspaceId }: EvidencePanelProps) {
@@ -123,10 +146,15 @@ function ResolvedEvidence({
   resolution,
 }: Readonly<{ resolution: Extract<CitationResolution, { ok: true }> }>) {
   const { citation } = resolution;
-  const parts = splitForHighlight(
-    citation.supporting_text,
+  const location = describeLocation(
+    citation.page_number,
     citation.page_quote_char_start,
     citation.page_quote_char_end,
+  );
+  const reliability = describeReliability(
+    citation.ocr_engine,
+    citation.ocr_confidence,
+    citation.support_score,
   );
   return (
     <figure className="evidence-card">
@@ -137,16 +165,24 @@ function ResolvedEvidence({
           {citation.page_number === null ? "" : ` · page ${citation.page_number}`}
           {citation.section === null ? "" : ` · ${citation.section}`}
         </span>
-        {citation.ocr_engine === null ? null : (
+        {location === null ? null : <span className="evidence-offsets">{location}</span>}
+        {reliability === null ? null : (
           // Scanned text is read by OCR and can be misread, so the reader is
-          // told when a passage came from a picture rather than from text.
-          <span className="evidence-ocr">Read by OCR ({citation.ocr_engine})</span>
+          // told both that the passage came from a picture and how well it was
+          // read — an engine name alone cannot separate a clean scan from a bad
+          // one.
+          <span className="evidence-ocr">{reliability}</span>
         )}
       </figcaption>
+      {/*
+        The whole passage is the quote: the resolver returns the text it read
+        back from the document at the validated offsets, having refused the
+        citation if it did not match. Marking all of it is therefore accurate —
+        highlighting a slice of it using the page offsets would mark the wrong
+        words, since those positions index the page and not this string.
+      */}
       <blockquote className="evidence-quote">
-        {parts.before}
-        <mark>{parts.quote}</mark>
-        {parts.after}
+        <mark>{citation.supporting_text}</mark>
       </blockquote>
     </figure>
   );

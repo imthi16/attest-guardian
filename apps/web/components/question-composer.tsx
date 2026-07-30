@@ -138,6 +138,11 @@ export function QuestionComposer({ conversationId, workspaceId }: QuestionCompos
     const decoder = new TextDecoder();
     let buffer = "";
     let failure: Readonly<{ code: string; message: string }> | null = null;
+    // A 200 response says the question was accepted, not that it was answered.
+    // If a proxy closes the stream cleanly after only stage events, the read
+    // loop ends normally with nothing persisted but the question — so success
+    // is the arrival of an `answer` event, never the end of the body.
+    let answered = false;
 
     try {
       for (;;) {
@@ -152,6 +157,8 @@ export function QuestionComposer({ conversationId, workspaceId }: QuestionCompos
           if (event.name === "stage") {
             const stage = String((JSON.parse(event.data) as { stage?: unknown }).stage ?? "");
             setState({ kind: "asking", stage });
+          } else if (event.name === "answer") {
+            answered = true;
           } else if (event.name === "error") {
             const payload = JSON.parse(event.data) as { code?: string; message?: string };
             failure = {
@@ -174,6 +181,23 @@ export function QuestionComposer({ conversationId, workspaceId }: QuestionCompos
     controller.current = null;
     if (failure !== null) {
       setState({ code: failure.code, kind: "failed", message: failure.message });
+      return;
+    }
+    if (!answered) {
+      // Genuinely ambiguous, and it is reported as such. The stream may have
+      // been cut before the pipeline finished, in which case only the question
+      // was stored — or after the answer was committed but before the frame
+      // carrying it was forwarded, in which case the thread below now holds it.
+      // Telling the asker to ask again would invite a duplicate question in the
+      // second case, so the thread is refreshed and they are pointed at it.
+      // The question stays in the box either way, so retrying costs no retyping.
+      setState({
+        code: clientErrorCodes.network,
+        kind: "failed",
+        message:
+          "The connection closed before the answer reached this page. The thread below has been reloaded — if the answer is not there, ask again.",
+      });
+      router.refresh();
       return;
     }
     setState({ kind: "idle" });

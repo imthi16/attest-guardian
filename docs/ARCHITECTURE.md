@@ -131,6 +131,24 @@ as an absence rather than a score. All four are null on a user turn, and on rows
 written before `0013`: the decision was never stored then, and inventing one
 would be worse than an honest null.
 
+A citation and its verification result share a `claim_index` (migration `0015`),
+unique per message. The two are written together but read back through two
+independent relationships with no ordering guarantee between them, and the API
+returns claims sorted while citations are not: a client pairing the lists by
+position would, on a multi-claim answer, eventually put one claim's passage under
+another. That failure is worse than a missing citation — the evidence looks
+proven and supports a different statement — so the association is stored rather
+than inferred, and the unique constraint stops one claim collecting two.
+
+The migration backfills existing rows by matching the verdict written beside each
+citation on `(message_id, claim_text)`, which is the association itself. Row order
+is deliberately not used: the two rows of a turn are written in one transaction
+and share `created_at`, and `id` is a random UUID, so ordering by either would
+invent a pairing rather than recover one. A citation whose verdict row is gone is
+parked above every index its message uses instead of defaulting onto claim zero —
+claim zero is a real statement, and attaching unmatched evidence to it would be
+the very defect the column prevents.
+
 A persisted citation carries `document_version_id` alongside its `chunk_id`,
 because resolving a citation requires it. Without that, the evidence behind an
 answer would be reachable only while the response that produced it was still on
@@ -218,9 +236,18 @@ thread and an explanation rather than a composer. The API re-authorizes regardle
 
 Asking posts to a route handler rather than a server action, because an action returns once
 and cannot report progress. The handler verifies `Origin` (as the upload relay does, and for
-the same `SameSite=Lax` reason), bounds the question length, and pipes the API's events
-through untouched — re-encoding them would risk the relay disagreeing with the API about
-what the answer was.
+the same `SameSite=Lax` reason), reads the request body under a byte cap — `request.json()`
+buffers the whole thing, so a length check inside the parsed object is not a memory bound and
+a forged `Origin` reaches that line without a session — bounds the question length, and pipes
+the API's events through untouched; re-encoding them would risk the relay disagreeing with
+the API about what the answer was.
+
+The cap counts bytes as they arrive rather than trusting `Content-Length`. That header is
+optional — a proxy forwarding over HTTP/2 or with chunked transfer encoding delimits the body
+without it — and this route exists to work behind a proxy, so refusing a headerless request
+would reject every question in such a deployment. It is still honoured as a cheap pre-filter,
+because an obviously oversized request should cost nothing to reject; a body that then
+exceeds the cap has its stream cancelled rather than drained.
 
 Progress is real: the labels in `lib/answer-stages.ts` map LangGraph node names, so
 "Searching your documents…" means the retrieve node finished. The **answer is not streamed
@@ -229,6 +256,19 @@ it lands the page calls `router.refresh()`. Nothing is painted from client state
 reader sees is what was persisted, including the decision and confidence that are not
 recoverable from the answer text. Cancelling aborts the request; the API only persists an
 answer from a terminal result, so an abandoned question leaves none.
+
+Success is the arrival of an `answer` event, never the end of the response body. A `200`
+means the question was accepted, and the API persists the user turn before the pipeline
+runs, so a proxy that closes the stream cleanly after only stage events ends the read loop
+normally with nothing but the question stored. Treating that as success would tell the asker
+an answer exists when the thread holds none.
+
+The outcome is reported as genuinely uncertain rather than as a plain failure, because the
+cut may equally have come *after* the answer was committed and before the frame carrying it
+was forwarded. The thread is refreshed and the reader is pointed at it — "if the answer is
+not there, ask again" — since telling them to retry unconditionally would invite a duplicate
+question and a duplicate answer. The question stays in the composer either way, so retrying
+costs no retyping.
 
 Every outcome has explicit wording in `components/answer-state.tsx`, keyed on the
 *decision* rather than the status: three decisions all report `abstained`, and telling them
@@ -242,9 +282,21 @@ would describe reading that never happened — and renders `supporting_text`, th
 back from the stored document at validated offsets. It never renders the quote the answer
 supplied. A citation that does not match its source shows a failure instead of the
 passage, which is the whole point: displaying the model's version of a passage as though
-the document said it is the failure this platform exists to prevent. The highlight is built
-by slicing the string, and falls back to no highlight if the offsets do not fit rather than
-marking the wrong words.
+the document said it is the failure this platform exists to prevent. `supporting_text` *is*
+the proven span — the resolver defines it as `content[start:end]` and refuses the citation
+if it does not match — so the whole of it is highlighted. The `page_quote_char_*` offsets
+locate that span inside its page and index nothing in the string, so they are stated as a
+locator rather than used to mark part of it. Scanned evidence is labelled with how well OCR
+read it, not merely that OCR read it: an engine name alone cannot separate a clean scan from
+an unreliable one, and a passage whose engine recorded *no* confidence is called unknown
+rather than presented as good.
+
+Claims and their evidence are matched on `claim_index`, never on list position, for the
+reason the persistence section gives. Each turn's text is tagged with its language so a
+Tamil answer is not read out under English pronunciation rules by a screen reader, and the
+machine codes the pipeline reports as a reason (`insufficient_evidence`, `unauthorized`, and
+the decision values) are translated into wording a reader can act on — the raw code is
+neither an explanation nor, when both reason fields carry it, worth printing twice.
 
 Question text, answer text, claim text, quotes, and thread titles are all tenant content
 and are rendered as text children throughout.
@@ -521,10 +573,15 @@ Two Next.js route handlers exist because a server action is the wrong shape for 
 | `POST /api/workspaces/[id]/documents` | Only `XMLHttpRequest` reports how much of a request body has been sent, and byte-level progress is the point for a 20 MB scan |
 | `GET /api/workspaces/[id]/documents/[docId]/download` | The presigned URL must be reached by a link navigation; `form-action 'self'` in the CSP would refuse a form redirect to the storage origin, and a link also works without client JavaScript |
 
-Both are relays, not authorization points: they exchange the `httpOnly` session cookie for a bearer
-token server side and let the API decide. The upload relay forwards only the file part, so no
+A third, `POST /api/workspaces/[id]/conversations/[cid]/stream`, exists because a server action
+returns once and cannot report progress at all.
+
+All three are relays, not authorization points: they exchange the `httpOnly` session cookie for a
+bearer token server side and let the API decide. The upload relay forwards only the file part, so no
 client-chosen metadata reaches tenant storage, and the presigned URL is minted at click time and
-never rendered into HTML.
+never rendered into HTML. Both body-accepting relays cap `Content-Length` before reading the body,
+because `request.formData()` and `request.json()` allocate it in full before any check on its
+contents can run.
 
 ### Untrusted content
 

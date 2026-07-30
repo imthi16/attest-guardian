@@ -17,9 +17,28 @@ const context = {
   params: Promise.resolve({ conversationId: CONVERSATION_ID, workspaceId: WORKSPACE_ID }),
 };
 
+/** A body delivered as one or more chunks, like a real request stream. */
+function streamOf(chunks: readonly string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+}
+
 function request(
   body: unknown,
-  overrides: Readonly<{ host?: string; origin?: string | null }> = {},
+  overrides: Readonly<{
+    /** Omitted entirely by a proxy using chunked transfer or HTTP/2 framing. */
+    contentLength?: string | null;
+    chunks?: readonly string[];
+    host?: string;
+    origin?: string | null;
+  }> = {},
 ): NextRequest {
   const headers = new Map<string, string>();
   const origin = overrides.origin === undefined ? `https://${APP_HOST}` : overrides.origin;
@@ -27,14 +46,18 @@ function request(
     headers.set("origin", origin);
   }
   headers.set("host", overrides.host ?? APP_HOST);
+  // `body === undefined` stands for a body that is not JSON at all.
+  const chunks = overrides.chunks ?? [body === undefined ? "not json" : JSON.stringify(body)];
+  const length =
+    overrides.contentLength === undefined
+      ? String(chunks.join("").length)
+      : overrides.contentLength;
+  if (length !== null) {
+    headers.set("content-length", length);
+  }
   return {
+    body: streamOf(chunks),
     headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
-    json: async () => {
-      if (body === undefined) {
-        throw new TypeError("not json");
-      }
-      return body;
-    },
   } as unknown as NextRequest;
 }
 
@@ -100,10 +123,11 @@ describe("POST .../conversations/[conversationId]/stream", () => {
       ["origin", "https://public.example"],
       ["host", "internal:3000"],
       ["x-forwarded-host", "public.example"],
+      ["content-length", "32"],
     ]);
     const proxied = {
+      body: streamOf(['{"question":"anything"}']),
       headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
-      json: async () => ({ question: "anything" }),
     } as unknown as NextRequest;
 
     expect((await POST(proxied, context)).status).toBe(200);
@@ -118,6 +142,77 @@ describe("POST .../conversations/[conversationId]/stream", () => {
 
   it("rejects a body that is not JSON", async () => {
     expect((await POST(request(undefined), context)).status).toBe(400);
+  });
+
+  it("refuses an oversized body on its declared length alone", async () => {
+    // The length checks above run only after the whole body is in the process,
+    // so the bound has to come first: a forged Origin is enough to reach this
+    // line without a session.
+    const response = await POST(
+      request({ question: "anything" }, { contentLength: String(1024 * 1024) }),
+      context,
+    );
+
+    expect(response.status).toBe(413);
+    expect(mockedStream).not.toHaveBeenCalled();
+  });
+
+  it("stops reading a body that lies about its length", async () => {
+    // A declared length is a claim, not a fact. The bytes are counted as they
+    // arrive and the rest of the stream is cancelled rather than allocated.
+    const cancelled = vi.fn();
+    const encoder = new TextEncoder();
+    // Never ends on its own: only the byte count can stop it.
+    const body = new ReadableStream<Uint8Array>({
+      cancel: cancelled,
+      pull(controller) {
+        controller.enqueue(encoder.encode("x".repeat(32 * 1024)));
+      },
+    });
+    const lying = {
+      body,
+      headers: {
+        get: (name: string) =>
+          ({ "content-length": "12", host: APP_HOST, origin: `https://${APP_HOST}` })[
+            name.toLowerCase()
+          ] ?? null,
+      },
+    } as unknown as NextRequest;
+
+    expect((await POST(lying, context)).status).toBe(413);
+    expect(mockedStream).not.toHaveBeenCalled();
+    // Cancelled rather than drained: this body never ends by itself, so the
+    // request returning at all is the proof, and the rest is never allocated.
+    expect(cancelled).toHaveBeenCalled();
+  });
+
+  it("accepts a proxied body that declares no length at all", async () => {
+    // HTTP/2 framing and chunked transfer encoding both delimit a body without
+    // `Content-Length`, and this route is explicitly meant to work behind a
+    // proxy — refusing them would reject every question in such a deployment.
+    mockedStream.mockResolvedValue({ ok: true, response: sseResponse() });
+
+    const response = await POST(
+      request({ question: "anything" }, { contentLength: null }),
+      context,
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockedStream.mock.calls[0][0].body).toEqual({
+      document_id: null,
+      question: "anything",
+    });
+  });
+
+  it("reassembles a body split across chunks", async () => {
+    mockedStream.mockResolvedValue({ ok: true, response: sseResponse() });
+
+    await POST(request(null, { chunks: ['{"question":"When is ', 'payment due?"}'] }), context);
+
+    expect(mockedStream.mock.calls[0][0].body).toEqual({
+      document_id: null,
+      question: "When is payment due?",
+    });
   });
 
   it("passes the API's refusal through with its stable code", async () => {

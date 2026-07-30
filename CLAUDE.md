@@ -154,9 +154,14 @@ Repository layout and intended ownership per directory:
   operational `decision`, `decision_reason`, `confidence`, `abstention_reason`
   (migration `0013`), because three different decisions all read as `abstained`
   and a thread keeping only the status degrades what the answer said on reload —
-  and each claim writes a `citations` and a `verification_results` row. A
-  persisted citation exposes `document_version_id` (from its chunk, no column
-  needed) because `/citations/resolve` requires it; without it the evidence panel
+  and each claim writes a `citations` and a `verification_results` row. Both
+  rows carry the same `claim_index` (migration `0015`, unique per message):
+  claims come back sorted by it while citations come out of an unordered
+  relationship, so a client pairing the two lists by position would eventually
+  file one claim's passage under another — evidence that looks proven and
+  supports a different statement. A persisted citation exposes
+  `document_version_id` (from its chunk, no column needed) because
+  `/citations/resolve` requires it; without it the evidence panel
   would work on a live answer and be inert on history. The stored `verifier` is
   `trace.verifier`, never a constant. The question is persisted before the
   pipeline runs (a failed run still records what was asked); the answer only from
@@ -192,12 +197,22 @@ Repository layout and intended ownership per directory:
   and `.../conversations/[conversationId]/stream` (an action returns once and cannot report
   progress). Route handlers get none of a server action's built-in protection, so every relay
   verifies `Origin` against `X-Forwarded-Host`/`Host` (`SameSite=Lax` is per-site, not
-  per-origin); the upload relay also bounds `Content-Length` *before* `request.formData()`,
-  which buffers the whole body. The chat UI consumes SSE stage events for progress only — the
+  per-origin); every relay also caps the request body *before* buffering it, because
+  `request.formData()`/`request.json()` read the whole thing before any check inside it can
+  run — the stream relay counts bytes as it reads rather than requiring `Content-Length`,
+  which HTTP/2 and chunked transfer omit. The chat UI consumes SSE stage events for progress only — the
   answer arrives in one event and the page then `router.refresh()`es, so the server-rendered
-  thread rather than client state is what a reader sees. The evidence panel renders
+  thread rather than client state is what a reader sees; a stream that ends without an
+  `answer` event is never a success (a 200 only means the question was accepted) but is
+  reported as *uncertain* rather than failed — the cut may have come after the answer
+  committed, so the page refreshes and points at the thread instead of telling the asker to
+  repeat a question that may already be answered. The evidence panel renders
   `supporting_text` from `/citations/resolve`, never the quote the answer supplied, and
-  resolves on open because resolution is audited. Uploaded filenames,
+  resolves on open because resolution is audited. That field *is* the proven quote
+  (`content[start:end]`), so the whole of it is highlighted — `page_quote_char_*` locates it
+  inside its page and indexes nothing in the string itself. Timestamps are formatted in the
+  browser (`components/local-time.tsx`): a Server Component formats in the server's zone,
+  which in a deployment is UTC. Uploaded filenames,
   titles, and worker error strings are untrusted: render them as text children only, never
   preview document contents, and keep `dangerouslySetInnerHTML` out of the app.
 - `services/` — planned boundaries for `ingestion`, `retrieval`, `verification`, `safety`, kept as

@@ -79,6 +79,36 @@ const VERDICT_COPY: Record<ClaimVerdict, Readonly<{ label: string; tone: AnswerT
   ambiguous: { label: "Ambiguous", tone: "caution" },
 };
 
+/**
+ * Wording for the stable machine codes the pipeline reports as a reason.
+ *
+ * `abstention_reason` is always a code, and `decision_reason` is prose except on
+ * the early gates, which put the same code in both. Rendered raw, a reader is
+ * shown `insufficient_evidence` — sometimes twice — where an explanation of why
+ * the platform refused belongs.
+ */
+const REASON_COPY: Readonly<Record<string, string>> = {
+  insufficient_evidence: "Nothing in this workspace's documents was close enough to the question.",
+  unauthorized: "You do not have access to the documents that would answer this.",
+  abstain: "The evidence was too weak to support any statement, so none was made.",
+  ask_for_clarification: "There is related material, but nothing that answers this exact question.",
+  escalate_for_review: "The documents disagree with each other, so this needs a human reviewer.",
+};
+
+/**
+ * A reason in words, or `null` when there is nothing to say.
+ *
+ * An unrecognized value is passed through: the prose reasons the decision policy
+ * writes are meant to be read, and swallowing an unknown code would hide why an
+ * answer was withheld — worse than showing an unfamiliar phrase.
+ */
+export function explainReason(reason: string | null): string | null {
+  if (reason === null || reason.trim() === "") {
+    return null;
+  }
+  return REASON_COPY[reason] ?? reason;
+}
+
 export function describeAnswer(
   decision: AnswerDecision | null,
   status: AnswerStatus | null,

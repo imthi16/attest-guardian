@@ -156,6 +156,11 @@ async def test_asking_persists_the_question_the_answer_and_its_evidence(
     assert answer["citations"][0]["quote_text"] in EVIDENCE
     assert answer["claims"][0]["verdict"] == "supported"
     assert answer["claims"][0]["verifier"]
+    # Evidence is bound to the statement it supports by index, so a reader is
+    # never shown one claim's passage underneath another.
+    assert {citation["claim_index"] for citation in answer["citations"]} == {
+        claim["claim_index"] for claim in answer["claims"]
+    }
 
     # The stored turn must say what the live response said, not a reduced
     # version of it: the decision and confidence are the answer's verdict, and a

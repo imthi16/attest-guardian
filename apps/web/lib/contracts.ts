@@ -171,12 +171,17 @@ export const conversationListSchema = z.array(conversationSchema);
 /**
  * One persisted evidence span. `document_version_id` is what makes a stored
  * citation resolvable, so evidence stays reachable after the response that
- * produced it is gone.
+ * produced it is gone; `claim_index` is what binds it to the statement it
+ * supports, because the API returns citations and claims as two lists whose
+ * order agrees only by convention.
+ *
+ * The document's own id and title are deliberately absent — they come back from
+ * resolving the citation, so requiring them here would fail every stored thread.
  */
 export const citationRecordSchema = z.object({
   chunk_id: z.string(),
-  document_id: z.string(),
   document_version_id: z.string(),
+  claim_index: z.number().int().nonnegative(),
   claim_text: z.string(),
   quote_text: z.string(),
   quote_start: z.number().int().nonnegative(),
@@ -222,7 +227,20 @@ export const conversationDetailSchema = z.object({
 });
 export type ConversationDetail = z.infer<typeof conversationDetailSchema>;
 
-/** A citation proven against stored provenance, for the evidence panel. */
+/**
+ * A citation proven against stored provenance, for the evidence panel.
+ *
+ * `supporting_text` is read back from the document at the validated offsets and
+ * is therefore exactly the quote — the `quote_char_*` and `page_quote_char_*`
+ * fields locate it inside the chunk and the page respectively; neither indexes
+ * into `supporting_text` itself.
+ *
+ * `ocr_confidence` and `support_score` are the reliability of the reading:
+ * `support_score` is `1` for born-digital text, the recorded OCR confidence for
+ * scanned text, and `null` when a passage was read by OCR that recorded no
+ * confidence at all. That last case is unknown reliability, not high, and a
+ * reader has to be able to tell the difference.
+ */
 export const resolvedCitationSchema = z.object({
   document_id: z.string(),
   document_title: z.string(),
@@ -240,6 +258,8 @@ export const resolvedCitationSchema = z.object({
   page_quote_char_end: z.number().int(),
   supporting_text: z.string(),
   ocr_engine: z.string().nullable(),
+  ocr_confidence: z.number().nullable(),
+  support_score: z.number().nullable(),
 });
 export type ResolvedCitation = z.infer<typeof resolvedCitationSchema>;
 
