@@ -156,11 +156,46 @@ async def test_asking_persists_the_question_the_answer_and_its_evidence(
     assert answer["claims"][0]["verdict"] == "supported"
     assert answer["claims"][0]["verifier"]
 
+    # The stored turn must say what the live response said, not a reduced
+    # version of it: the decision and confidence are the answer's verdict, and a
+    # reader of the thread has no other way to recover them.
+    assert answer["decision"] == body["decision"]
+    assert answer["decision_reason"] == body["decision_reason"]
+    assert answer["confidence"] == pytest.approx(body["confidence"])
+    assert answer["abstention_reason"] is None
+
+    # A stored citation must be resolvable, or the evidence behind an answer is
+    # only reachable while the response that produced it is still on screen.
+    resolved = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/citations/resolve",
+        json={
+            "document_version_id": answer["citations"][0]["document_version_id"],
+            "chunk_id": answer["citations"][0]["chunk_id"],
+            "quote": answer["citations"][0]["quote_text"],
+            "quote_char_start": answer["citations"][0]["quote_start"],
+            "quote_char_end": answer["citations"][0]["quote_end"],
+        },
+        headers=owner.headers,
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["supporting_text"] == answer["citations"][0]["quote_text"]
+
+    # A user turn carries no verdict of its own.
+    assert question["decision"] is None
+    assert question["confidence"] is None
+
 
 async def test_an_abstention_is_recorded_rather_than_dropped(
     client: httpx.AsyncClient,
 ) -> None:
-    """An abstention is a real answer about the evidence, not a non-event."""
+    """An abstention is a real answer about the evidence, not a non-event.
+
+    And it must record *which* abstention it was. Three different decisions all
+    report `answer_status: "abstained"` — no usable evidence, a question needing
+    clarification, and evidence that contradicts itself — so a thread keeping
+    only the status could not tell a reader whether a human had been asked to
+    look at something.
+    """
     owner = await make_account(client, "c-empty@example.com")
     workspace_id = await make_workspace(client, owner)
     conversation_id = await start_conversation(client, owner, workspace_id)
@@ -171,7 +206,8 @@ async def test_an_abstention_is_recorded_rather_than_dropped(
         headers=owner.headers,
     )
     assert answered.status_code == 200, answered.text
-    assert answered.json()["abstained"] is True
+    body = answered.json()
+    assert body["abstained"] is True
 
     detail = await client.get(
         f"/api/v1/workspaces/{workspace_id}/conversations/{conversation_id}",
@@ -182,6 +218,13 @@ async def test_an_abstention_is_recorded_rather_than_dropped(
     assert messages[1]["answer_status"] == "abstained"
     assert messages[1]["citations"] == []
     assert messages[1]["claims"] == []
+
+    assert messages[1]["abstention_reason"] == body["abstention_reason"]
+    assert messages[1]["decision"] == body["decision"]
+    assert messages[1]["decision_reason"] == body["decision_reason"]
+    # Zero, not null: the pipeline reports no confidence in a withheld answer,
+    # which is a different statement from having no opinion recorded.
+    assert messages[1]["confidence"] == pytest.approx(0.0)
 
 
 async def test_streaming_reports_stages_and_matches_the_json_route(

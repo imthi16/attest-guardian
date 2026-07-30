@@ -43,6 +43,11 @@ class ConversationRepository(WorkspaceScopedRepository[Conversation]):
         Eager-loads the whole thread so rendering it is one round trip rather
         than one per message. The workspace filter is applied to the
         conversation, which is what makes the nested rows safe to read.
+
+        Each citation's chunk comes with it, because a citation stores only a
+        `chunk_id` while resolving one needs the version that chunk belongs to.
+        Loading it here rather than on access keeps that a single query and means
+        serializing a thread cannot fail on a lazy load outside the session.
         """
         statement = (
             select(Conversation)
@@ -51,7 +56,9 @@ class ConversationRepository(WorkspaceScopedRepository[Conversation]):
                 Conversation.workspace_id == self.workspace_id,
             )
             .options(
-                selectinload(Conversation.messages).selectinload(Message.citations),
+                selectinload(Conversation.messages)
+                .selectinload(Message.citations)
+                .selectinload(Citation.chunk),
                 selectinload(Conversation.messages).selectinload(Message.verification_results),
             )
         )
@@ -91,7 +98,7 @@ class MessageRepository(Repository[Message]):
             .where(Message.conversation_id == conversation_id)
             .order_by(Message.created_at)
             .options(
-                selectinload(Message.citations),
+                selectinload(Message.citations).selectinload(Citation.chunk),
                 selectinload(Message.verification_results),
             )
         )

@@ -116,9 +116,30 @@ failure is transient and retried like any other stage's.
 the **user message** — keeping the verbatim original, the normalized form, and
 the Tamil-script transliteration, so a Tanglish question can be re-run later
 without guessing what was meant — the **assistant message** with its grounding
-outcome, and one **citation** plus one **verification result** per claim, so the
+verdict, and one **citation** plus one **verification result** per claim, so the
 evidence behind an answer stays auditable independently of the response that
 returned it.
+
+The assistant turn keeps the *whole* verdict, not just `answer_status`: the
+operational `decision` (migration `0013`), its human-readable reason, the
+calibrated confidence, and the abstention code. Three different decisions all
+report `answer_status: "abstained"` — no usable evidence, a question that needs
+narrowing, and evidence that contradicts itself — so a thread storing only the
+status could not tell a reader which happened, or that a human had been asked to
+review. `confidence` is `0.0` on every withheld answer, which a client must read
+as an absence rather than a score. All four are null on a user turn, and on rows
+written before `0013`: the decision was never stored then, and inventing one
+would be worse than an honest null.
+
+A persisted citation carries `document_version_id` alongside its `chunk_id`,
+because resolving a citation requires it. Without that, the evidence behind an
+answer would be reachable only while the response that produced it was still on
+screen — the panel would work live and be inert on history. It comes from the
+chunk the citation already points at, so it needed no column; the document's
+title and id come back from resolving, which is also where the surrounding
+provenance lives. The stored `verifier` is the one the trace says actually ran,
+not a constant, since a verdict attributed to the wrong verifier is not audit
+evidence.
 
 Ordering is deliberate. The question is persisted *before* the pipeline runs and
 is kept even when the run fails: a question that failed is still something

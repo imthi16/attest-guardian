@@ -31,9 +31,23 @@ class ConversationResponse(BaseModel):
 
 
 class CitationRecordResponse(BaseModel):
-    """One persisted evidence span behind a claim in an answer."""
+    """One persisted evidence span behind a claim in an answer.
+
+    Carries `document_version_id` even though the `citations` row stores only a
+    `chunk_id`, because resolving a citation requires it: without it a client
+    reading a stored thread could not open the evidence behind an answer, and an
+    evidence panel would work on a live answer while being inert on history. It
+    comes from the chunk the citation already points at, so no column was
+    needed.
+
+    The document's own id and title are deliberately not duplicated here — they
+    come back from resolving the citation, together with the surrounding
+    provenance a reader actually needs, and an id with no title is not something
+    a client can show.
+    """
 
     chunk_id: uuid.UUID
+    document_version_id: uuid.UUID
     claim_text: str
     quote_text: str
     quote_start: int
@@ -65,6 +79,14 @@ class MessageResponse(BaseModel):
     normalized_content: str | None
     transliterated_content: str | None
     answer_status: str | None
+    # The rest of the grounding verdict, so a reloaded turn says exactly what the
+    # live answer said. `decision` is what separates the three situations that
+    # all report `answer_status: "abstained"`; `confidence` is `0.0` on every
+    # withheld answer, which a client must read as an absence rather than a score.
+    decision: str | None
+    decision_reason: str | None
+    confidence: float | None
+    abstention_reason: str | None
     created_at: datetime
     citations: list[CitationRecordResponse]
     claims: list[ClaimRecordResponse]
@@ -79,10 +101,15 @@ class MessageResponse(BaseModel):
             normalized_content=message.normalized_content,
             transliterated_content=message.transliterated_content,
             answer_status=message.answer_status.value if message.answer_status else None,
+            decision=message.decision.value if message.decision else None,
+            decision_reason=message.decision_reason,
+            confidence=message.confidence,
+            abstention_reason=message.abstention_reason,
             created_at=message.created_at,
             citations=[
                 CitationRecordResponse(
                     chunk_id=citation.chunk_id,
+                    document_version_id=citation.chunk.document_version_id,
                     claim_text=citation.claim_text,
                     quote_text=citation.quote_text,
                     quote_start=citation.quote_start,

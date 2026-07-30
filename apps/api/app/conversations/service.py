@@ -6,7 +6,10 @@ of a durable thread. It writes three kinds of row for one question:
 * the **user message**, keeping every representation of the query — verbatim
   original, normalized, and Tamil-script transliteration — so a Tanglish
   question can be re-run or re-indexed later without guessing what was meant;
-* the **assistant message**, carrying the grounding outcome;
+* the **assistant message**, carrying the whole grounding verdict — the
+  outcome, the operational decision and its reason, the calibrated confidence,
+  and the abstention code — because a thread that kept only the outcome would
+  read three different decisions as the same word;
 * one **citation** and one **verification result** per claim, so the evidence
   behind an answer survives independently of the response that returned it.
 
@@ -25,11 +28,15 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.conversations import Citation, Conversation, Message, VerificationResult
-from app.db.models.enums import AnswerStatus, ClaimVerdict, MessageRole
+from app.db.models.enums import AnswerDecision, AnswerStatus, ClaimVerdict, MessageRole
 from app.db.repositories.conversations import ConversationRepository
 from app.language.processor import QueryProcessor
 from app.rag.types import AtomicClaim, RagResult
 
+# Fallback identity for the stored verdict. The trace names the verifier that
+# actually ran, and that is what gets persisted; this is only for a result whose
+# trace carries no name, so the column is never silently wrong about which
+# verifier produced a verdict.
 VERIFIER_NAME = "attest-claim-verifier"
 
 
@@ -48,6 +55,16 @@ def _persisted_verdict(verdict: object) -> ClaimVerdict:
 def _persisted_status(outcome: object) -> AnswerStatus:
     """Translate the pipeline's grounding outcome into the persisted enum."""
     return AnswerStatus(str(outcome))
+
+
+def _persisted_decision(decision: str) -> AnswerDecision:
+    """Translate the policy's decision into the persisted enum.
+
+    Converts by value for the same reason as the verdict above: the decision
+    policy keeps its own vocabulary so it never imports the ORM, and a
+    hand-written table would silently mismap if either side gained a member.
+    """
+    return AnswerDecision(decision)
 
 
 class ConversationNotFoundError(Exception):
@@ -140,17 +157,28 @@ async def record_answer(
         content=answer.text,
         language=result.trace.detected_language,
         answer_status=_persisted_status(answer.outcome),
+        decision=_persisted_decision(answer.decision),
+        decision_reason=answer.decision_reason or None,
+        confidence=answer.confidence,
+        abstention_reason=answer.abstention_reason,
     )
     session.add(message)
     await session.flush()
 
+    verifier = result.trace.verifier or VERIFIER_NAME
     for claim in answer.claims:
-        _add_claim_rows(session, message.id, claim)
+        _add_claim_rows(session, message.id, claim, verifier=verifier)
     await session.flush()
     return message
 
 
-def _add_claim_rows(session: AsyncSession, message_id: uuid.UUID, claim: AtomicClaim) -> None:
+def _add_claim_rows(
+    session: AsyncSession,
+    message_id: uuid.UUID,
+    claim: AtomicClaim,
+    *,
+    verifier: str,
+) -> None:
     """Write the citation and the verdict for one claim.
 
     The claim span is recorded against the claim's own text rather than an offset
@@ -179,7 +207,7 @@ def _add_claim_rows(session: AsyncSession, message_id: uuid.UUID, claim: AtomicC
             claim_text=claim.text,
             verdict=_persisted_verdict(claim.verdict),
             confidence=claim.confidence,
-            verifier=VERIFIER_NAME,
+            verifier=verifier,
         )
     )
 

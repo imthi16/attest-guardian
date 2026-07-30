@@ -150,10 +150,17 @@ Repository layout and intended ownership per directory:
   Tables are atomic, chunks never span pages, and the section hierarchy carries across pages.
   Conversations (`app/conversations/`, `app/routes/conversations.py`) persist a
   thread: the user turn keeps original/normalized/transliterated query text, the
-  assistant turn keeps its grounding outcome, and each claim writes a `citations`
-  and a `verification_results` row. The question is persisted before the pipeline
-  runs (a failed run still records what was asked); the answer only from a
-  terminal result. Streaming (`POST .../messages/stream`) is SSE over
+  assistant turn keeps its whole grounding verdict — `answer_status` **and** the
+  operational `decision`, `decision_reason`, `confidence`, `abstention_reason`
+  (migration `0013`), because three different decisions all read as `abstained`
+  and a thread keeping only the status degrades what the answer said on reload —
+  and each claim writes a `citations` and a `verification_results` row. A
+  persisted citation exposes `document_version_id` (from its chunk, no column
+  needed) because `/citations/resolve` requires it; without it the evidence panel
+  would work on a live answer and be inert on history. The stored `verifier` is
+  `trace.verifier`, never a constant. The question is persisted before the
+  pipeline runs (a failed run still records what was asked); the answer only from
+  a terminal result. Streaming (`POST .../messages/stream`) is SSE over
   `RagGraph.run_streaming`, which reads LangGraph's own `astream` updates — stage
   events are real node completions, and the answer is emitted once at the end
   because extractive generation has no partial text safe to display. Both routes

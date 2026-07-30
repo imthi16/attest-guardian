@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceOwnedModel
 from app.db.models.enums import (
+    AnswerDecision,
     AnswerStatus,
     ClaimVerdict,
     FeedbackRating,
@@ -50,9 +51,23 @@ class Conversation(WorkspaceOwnedModel):
 
 
 class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """One turn in a conversation, keeping all query representations."""
+    """One turn in a conversation, keeping all query representations.
+
+    An assistant turn stores the whole grounding verdict, not just its status:
+    the decision, the human-readable reason behind it, the calibrated
+    confidence, and the abstention code. Without those, reloading a thread
+    degrades what the answer said — three different decisions all read as
+    `abstained`, and a withheld answer becomes indistinguishable from an absent
+    one. All four are null on a user turn, which has no verdict of its own.
+    """
 
     __tablename__ = "messages"
+    __table_args__ = (
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="confidence_range",
+        ),
+    )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"),
@@ -66,6 +81,15 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     answer_status: Mapped[AnswerStatus | None] = mapped_column(
         pg_enum(AnswerStatus, "answer_status"),
     )
+    decision: Mapped[AnswerDecision | None] = mapped_column(
+        pg_enum(AnswerDecision, "answer_decision"),
+    )
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    # A stable machine code (`insufficient_evidence`, `unauthorized`, or the
+    # decision that withheld the answer) rather than an enum: it draws from two
+    # vocabularies, so constraining it to one would reject valid values.
+    abstention_reason: Mapped[str | None] = mapped_column(String(100))
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     citations: Mapped[list["Citation"]] = relationship(
