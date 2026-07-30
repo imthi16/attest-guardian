@@ -302,6 +302,11 @@ async def submit_feedback(
         existing.rating = rating
         existing.note = payload.note
         await session.flush()
+        # `updated_at` is `onupdate=func.now()`, so the flush expires it and the
+        # new value lives only in the database. Refresh explicitly: building the
+        # response would otherwise read an expired attribute and trigger IO from
+        # synchronous code, which async SQLAlchemy cannot do.
+        await session.refresh(existing)
         return FeedbackResponse.of(existing)
 
     created = await repository.add(
