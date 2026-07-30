@@ -22,6 +22,7 @@ Run standalone with `python -m app.ingestion.worker` (see `make dev-worker`).
 import asyncio
 import hashlib
 import logging
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -52,6 +53,9 @@ from app.embeddings.types import DimensionMismatchError, EmbeddingVector
 from app.ingestion.queue import JobMessage, JobQueue
 from app.ingestion.scanner import MalwareScanner
 from app.language import detect_language
+from app.observability import context as trace_context
+from app.observability.logging import configure_logging
+from app.observability.metrics import INGESTION_DURATION, INGESTION_JOBS, INGESTION_STAGES
 from app.parsing.ocr import NullOcrEngine, OcrEngine
 from app.parsing.pdf import parse_pdf, render_pdf_page_png
 from app.parsing.text import parse_docx, parse_text
@@ -143,6 +147,23 @@ class IngestionWorker:
         return True
 
     async def process(self, message: JobMessage) -> None:
+        # The job runs inside the trace of the request that enqueued it, so the
+        # worker's lines join the upload the user is still waiting on. A job with
+        # no inbound trace (an operator requeue, a sweep) starts its own rather
+        # than being dropped from telemetry.
+        context = trace_context.continue_or_start(
+            message.traceparent,
+            request_id=str(message.job_id),
+        )
+        token = trace_context.bind(context)
+        started = time.perf_counter()
+        try:
+            await self._process(message)
+        finally:
+            INGESTION_DURATION.observe(time.perf_counter() - started, stage="job")
+            trace_context.reset(token)
+
+    async def _process(self, message: JobMessage) -> None:
         if not await self._claim(message):
             return
         try:
@@ -213,6 +234,7 @@ class IngestionWorker:
                 )
                 return False
             job.status = IngestionStatus.RUNNING
+            INGESTION_JOBS.increment(result="claimed")
             job.started_at = datetime.now(UTC)
             job.attempts += 1
             job.error = None
@@ -247,6 +269,7 @@ class IngestionWorker:
             if job is None:
                 raise JobVanishedError
             job.stage = stage
+        INGESTION_STAGES.increment(stage=stage.value, result="reached")
         logger.info(
             "stage reached",
             extra={"job_id": str(message.job_id), "stage": stage.value},
@@ -651,6 +674,7 @@ class IngestionWorker:
                 resource_id=job.document_id,
                 workspace_id=message.workspace_id,
             )
+        INGESTION_JOBS.increment(result="succeeded")
         logger.info("ingestion succeeded", extra={"job_id": str(message.job_id)})
 
     async def _quarantine(self, message: JobMessage, reason: str) -> None:
@@ -810,8 +834,11 @@ def _main() -> None:
     from app.parsing.ocr import build_ocr_engine
     from app.storage.s3 import S3ObjectStorage
 
-    logging.basicConfig(level=logging.INFO)
     settings = get_settings()
+    # The same JSON formatter and redaction the API installs, so a worker
+    # line and an API line join on the same fields — and so a worker cannot
+    # log tenant content that the API would have redacted.
+    configure_logging(settings.log_level)
     worker = IngestionWorker(
         session_factory=get_session_factory(),
         storage=S3ObjectStorage(settings),

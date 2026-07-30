@@ -40,6 +40,7 @@ The committed `.env.example` contains non-secret local defaults only.
 | `OCR_LANGUAGES` | OCR language codes (`tam+eng`); `paddle` uses the first recognised code | `tam+eng` |
 | `CHUNK_MAX_CHARS` | Maximum characters per chunk | `1200` |
 | `CHUNK_OVERLAP_CHARS` | Context shared between neighboring chunks | `150` |
+| `METRICS_ENABLED` | Serve `GET /metrics` (Prometheus). Off by default; the endpoint has no authentication of its own | `false` |
 | `EMBEDDING_PROVIDER` | Embedding backend (`local`) | `local` |
 | `EMBEDDING_MODEL`, `EMBEDDING_MODEL_VERSION` | Provider provenance stored on every vector, and the scope of every vector search | `bge-m3-local`, `hashing-v2` |
 | `EMBEDDING_DIMENSIONS` | Vector width; must match the `chunk_embeddings` column | `1024` |

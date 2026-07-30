@@ -1,0 +1,135 @@
+# Prometheus alerting rules for Attest Guardian.
+#
+# Every rule here is derived only from the metrics in `app/observability/
+# metrics.py`, which carry no identifier and no tenant content — so an alert can
+# be routed to a chat channel without leaking who was affected or what they
+# asked. Naming the affected workspace is a deliberate omission, not an
+# oversight: an operator finds that in the logs, where authorization exists.
+#
+# Thresholds are starting points, not measurements. Nothing has run in
+# production, so anyone claiming these are tuned would be inventing a baseline.
+# Review them against the first fortnight of real traffic.
+groups:
+  - name: attest-availability
+    interval: 30s
+    rules:
+      - alert: AttestApiDown
+        expr: up{job="attest-api"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "The API is not being scraped"
+          description: >-
+            No successful scrape for two minutes. Check the process and its
+            readiness probe before assuming a network fault.
+
+      - alert: AttestHighServerErrorRate
+        # Server errors as a share of all requests. A ratio rather than a count,
+        # so a quiet night does not silence it and a busy hour does not fire it.
+        expr: >-
+          sum(rate(attest_http_requests_total{status="5xx"}[5m]))
+          / clamp_min(sum(rate(attest_http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "More than 5% of requests are failing"
+
+      - alert: AttestSlowRequests
+        expr: >-
+          histogram_quantile(
+            0.95, sum by (le, route) (rate(attest_http_request_duration_seconds_bucket[10m]))
+          ) > 5
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 latency above 5s on {{ $labels.route }}"
+
+  - name: attest-answer-quality
+    interval: 1m
+    rules:
+      # The alert peculiar to this product. A rising abstention rate is not an
+      # error and appears in no error metric — the API returns 200, the pipeline
+      # behaves exactly as designed, and users simply stop getting answers.
+      # It is the clearest early signal that retrieval has regressed, an
+      # embedding version was changed without re-indexing, or a corpus went
+      # stale. Without this rule that failure reaches users first.
+      - alert: AttestAbstentionRateHigh
+        expr: >-
+          sum(rate(attest_answers_total{outcome="abstained"}[30m]))
+          / clamp_min(sum(rate(attest_answers_total[30m])), 0.001) > 0.4
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Over 40% of answers are abstentions"
+          description: >-
+            Check whether retrieval regressed, an embedding version changed
+            without a re-index, or a workspace's documents were archived.
+
+      - alert: AttestEscalationsRising
+        # Contradictory evidence is a data problem a human has to look at, and
+        # it is distinct from having no evidence at all.
+        expr: sum(rate(attest_answers_total{decision="escalate_for_review"}[1h])) > 0.05
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Answers are being escalated for contradictory evidence"
+
+      - alert: AttestClaimsMostlyDropped
+        # Claims proposed then dropped by verification. Answers still look
+        # correct while quietly getting thinner, so no user reports it.
+        expr: >-
+          sum(rate(attest_claims_total{verdict!="supported"}[30m]))
+          / clamp_min(sum(rate(attest_claims_total[30m])), 0.001) > 0.5
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Over half of proposed claims fail verification"
+
+  - name: attest-ingestion
+    interval: 1m
+    rules:
+      - alert: AttestIngestionStalled
+        # Jobs are being claimed and no stage is completing: a worker that died
+        # mid-job leaves the queue growing in silence.
+        #
+        # The first draft of this rule compared the stage rate against the
+        # *lifetime* stage counter, which is satisfied by any quiet period after
+        # the first successful ingestion — it would have paged continuously
+        # whenever nobody was uploading. Evidence of queued work is what makes
+        # the difference between stalled and idle, so the claim rate is the
+        # left-hand side.
+        expr: >-
+          sum(rate(attest_ingestion_jobs_total{result="claimed"}[15m])) > 0
+          and sum(rate(attest_ingestion_stages_total[15m])) == 0
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "No ingestion stage has completed in 15 minutes"
+
+      - alert: AttestSlowIngestionStage
+        expr: >-
+          histogram_quantile(
+            0.95, sum by (le, stage) (rate(attest_ingestion_stage_duration_seconds_bucket[30m]))
+          ) > 300
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 of the {{ $labels.stage }} stage is above five minutes"
+
+      - alert: AttestModelProviderFailing
+        expr: >-
+          sum(rate(attest_model_calls_total{result="error"}[10m]))
+          / clamp_min(sum(rate(attest_model_calls_total[10m])), 0.001) > 0.1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Over 10% of embedding, rerank, or OCR calls are failing"

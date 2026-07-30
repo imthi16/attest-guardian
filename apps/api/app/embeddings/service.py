@@ -9,6 +9,7 @@ embedding many chunk texts and embedding a single query.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 
 from app.config import Settings, get_settings
@@ -20,6 +21,7 @@ from app.embeddings.types import (
     EmbeddingResult,
     EmbeddingVector,
 )
+from app.observability.metrics import MODEL_CALLS, MODEL_DURATION
 
 
 def build_embedding_provider(settings: Settings | None = None) -> EmbeddingProvider:
@@ -57,8 +59,18 @@ class EmbeddingService:
         return self._provider.dimensions
 
     def embed_texts(self, texts: Sequence[str]) -> EmbeddingResult:
-        result = self._provider.embed(texts)
-        self._validate(result, expected_count=len(texts))
+        started = time.perf_counter()
+        try:
+            result = self._provider.embed(texts)
+            self._validate(result, expected_count=len(texts))
+        except Exception:
+            # Counted before re-raising: a provider failing is the condition the
+            # model-call alert exists for, and an unrecorded failure is one an
+            # operator learns about from a user.
+            MODEL_CALLS.increment(kind="embedding", result="error")
+            raise
+        MODEL_CALLS.increment(kind="embedding", result="ok")
+        MODEL_DURATION.observe(time.perf_counter() - started, kind="embedding")
         return result
 
     def embed_query(self, text: str) -> EmbeddingVector:

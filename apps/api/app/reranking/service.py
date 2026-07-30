@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from app.observability.metrics import MODEL_CALLS, MODEL_DURATION
 from app.reranking.provider import LocalLexicalReranker
 from app.reranking.types import (
     RankedItem,
@@ -106,6 +107,7 @@ class RerankService:
             scores = self._reranker.score(query, items)
         except RerankError:
             metrics.duration_ms = (time.perf_counter() - start) * 1000
+            MODEL_CALLS.increment(kind="rerank", result="error")
             metrics.failed = True
             metrics.returned = len(items)
             logger.warning(
@@ -114,6 +116,8 @@ class RerankService:
             )
             return RerankOutcome(result=self._passthrough(items), metrics=metrics)
         metrics.duration_ms = (time.perf_counter() - start) * 1000
+        MODEL_CALLS.increment(kind="rerank", result="ok")
+        MODEL_DURATION.observe(time.perf_counter() - start, kind="rerank")
 
         if len(scores) != len(items):
             # A contract violation is a bug, not bad input: fail loudly rather

@@ -1152,6 +1152,36 @@
         "title": "MessageResponse",
         "type": "object"
       },
+      "ReadinessResponse": {
+        "description": "Whether every dependency is reachable, and which is not.\n\nA dependency's verdict is a name and one of two words. Nothing here says\n*why* something is unavailable: this endpoint cannot authenticate its caller,\nand a driver's error message routinely carries the DSN it failed to reach —\nhost, port, user, occasionally a password. The reason goes to the logs.",
+        "properties": {
+          "dependencies": {
+            "additionalProperties": {
+              "enum": [
+                "ok",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "dependencies"
+        ],
+        "title": "ReadinessResponse",
+        "type": "object"
+      },
       "RefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -3626,6 +3656,38 @@
           }
         },
         "summary": "Health",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Report whether every dependency this process needs is reachable.\n\nA degraded result is `503`, so a load balancer stops sending traffic — but\nit is deliberately *not* wired to a restart: a database blip would otherwise\nroll every replica, turning a dependency's outage into an outage of its own.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "A dependency is unreachable."
+          }
+        },
+        "summary": "Readyz",
         "tags": [
           "system"
         ]

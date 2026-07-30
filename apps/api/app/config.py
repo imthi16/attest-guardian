@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_docs_enabled: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Off by default. A scrape endpoint published automatically is how a
+    # service's request volumes and error rates end up on the public
+    # internet; an operator who wants it enables it behind their own
+    # network boundary.
+    metrics_enabled: bool = False
 
     database_url: str = "postgresql+asyncpg://attest:attest@localhost:5432/attest"
     redis_url: str = "redis://localhost:6379/0"

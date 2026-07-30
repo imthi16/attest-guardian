@@ -20,6 +20,7 @@ from collections.abc import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repositories.audit import AuditLogRepository
+from app.observability.metrics import ANSWER_DURATION, ANSWERS, CLAIMS
 from app.rag.config import RagConfig
 from app.rag.generation import AnswerGenerator
 from app.rag.graph import EvidenceRetriever, RagGraph
@@ -89,6 +90,7 @@ class RagService:
         terminal.trace.total_ms = (time.perf_counter() - start) * 1000
 
         await self._record(workspace_id, actor_user_id, terminal.trace, conversation_id)
+        _observe(terminal)
         logger.info(
             "rag answer completed",
             extra={"workspace_id": str(workspace_id), "trace": terminal.trace.as_metadata()},
@@ -135,6 +137,10 @@ class RagService:
                 continue
             terminal.trace.total_ms = (time.perf_counter() - start) * 1000
             await self._record(workspace_id, actor_user_id, terminal.trace, conversation_id)
+            # Streaming is the chat UI's path, so leaving it unobserved would
+            # have meant the abstention metric missed almost every real answer
+            # while looking healthy on the JSON route nobody uses interactively.
+            _observe(terminal)
             logger.info(
                 "rag answer completed",
                 extra={
@@ -167,3 +173,30 @@ class RagService:
             actor_user_id=actor_user_id,
             detail=trace.as_metadata(),
         )
+
+
+def _observe(terminal: RagState) -> None:
+    """Record the outcome of one answer.
+
+    The decision is the label rather than the outcome, because three different
+    decisions all report `abstained` and an operator needs to tell "no evidence"
+    from "the evidence contradicts itself" — the second is a data problem
+    somebody has to look at, the first usually is not.
+
+    Claim verdicts are counted here and nowhere else: unsupported and
+    contradicted claims are dropped before the answer, so nothing downstream ever
+    sees them. A rise in dropped claims is retrieval degrading while the answers
+    still look fine.
+    """
+    trace = terminal.trace
+    ANSWERS.increment(decision=terminal.decision, outcome=str(trace.outcome))
+    if trace.total_ms is not None:
+        ANSWER_DURATION.observe(trace.total_ms / 1000)
+    CLAIMS.increment(len(terminal.claims), verdict="supported")
+    for verdict, count in (
+        ("unsupported", trace.unsupported_claim_count),
+        ("contradicted", trace.contradicted_claim_count),
+        ("partial", trace.partial_claim_count),
+    ):
+        if count:
+            CLAIMS.increment(count, verdict=verdict)

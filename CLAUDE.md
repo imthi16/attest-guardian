@@ -229,8 +229,22 @@ Repository layout and intended ownership per directory:
   diff — a hand-written mirror that drifts rejects valid responses as transport failures.
   `packages/config` and `packages/observability` remain reserved for shared config and
   tracing/metrics/logging helpers across `apps/*` and `services/*`.
-- `infra/` — Alembic migrations + row-level security (`infra/migrations`), dashboards/alerts
-  (`infra/monitoring`).
+- `infra/` — Alembic migrations + row-level security (`infra/migrations`), the Grafana
+  dashboard and Prometheus rules (`infra/monitoring`).
+- Observability (`app/observability/`, `docs/OBSERVABILITY.md`): JSON logs whose redaction
+  lives in the **formatter**, not at call sites — fields are classified by *name*
+  (`redaction.py`), because a token and a document id are both opaque strings; anything
+  unrecognised is fingerprinted, so a new field fails closed. Exceptions are reduced to
+  their *type* and the format string is logged rather than the interpolated message, since
+  both otherwise carry bound parameters and tenant text. Trace context is W3C
+  `traceparent`: an inbound one is honoured, an inbound `X-Request-ID` never is (it is
+  echoed back as *our* id), and the trace rides the queue message so worker lines join the
+  upload. Metric labels are **stricter than log fields** — `workspace_id` is right in a log
+  and refused as a label, because a scrape has no per-tenant authorization and every value
+  is a permanent series. `/health` is liveness and touches nothing; `/readyz` checks
+  dependencies and must not be wired to a restart. `/metrics` is off unless
+  `METRICS_ENABLED`. **No collector is wired** — the formats are standard, the pipeline is
+  not built. `configure_logging` belongs to the process entry point, never `create_app`.
 - `evaluation/` — the versioned data the platform is scored against: `datasets/*.json`,
   `thresholds.json` (every metric floor, in one file so lowering one is a legible diff),
   `manifest.json` (a SHA-256 per dataset, verified on load — editing a dataset fails the

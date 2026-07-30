@@ -27,6 +27,7 @@ from app.db.repositories.ingestion import IngestionJobRepository
 from app.documents.keys import document_prefix
 from app.documents.purge import collect_purge
 from app.ingestion.queue import JobMessage, JobQueue
+from app.observability.context import current_traceparent
 
 
 class DocumentNotFoundError(Exception):
@@ -223,7 +224,15 @@ async def retry_ingestion(
     # commits; it finds no row, drops the message, and `requeue_stale` picks
     # the job up later. Duplicate delivery stays safe because claiming is a
     # compare-and-set.
-    await queue.enqueue(JobMessage(job_id=job.id, workspace_id=workspace_id))
+    # The enqueueing request's trace travels with the job, so the worker's
+    # lines join the upload the user is still waiting on.
+    await queue.enqueue(
+        JobMessage(
+            job_id=job.id,
+            workspace_id=workspace_id,
+            traceparent=current_traceparent(),
+        )
+    )
     return job
 
 

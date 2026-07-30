@@ -18,6 +18,7 @@ from app.db.repositories.documents import DocumentRepository, DocumentVersionRep
 from app.documents.keys import version_key
 from app.documents.validation import UploadRejectedError, validate_upload
 from app.ingestion.queue import JobMessage, JobQueue
+from app.observability.context import current_traceparent
 from app.storage.base import ObjectStorage
 
 
@@ -142,7 +143,15 @@ async def store_new_document(
     # A worker may dequeue before this transaction commits; it will find no
     # row, drop the message, and `requeue_stale` re-enqueues the job later.
     # Duplicate delivery is safe because claiming is a compare-and-set.
-    await queue.enqueue(JobMessage(job_id=job.id, workspace_id=workspace_id))
+    # The enqueueing request's trace travels with the job, so the worker's
+    # lines join the upload the user is still waiting on.
+    await queue.enqueue(
+        JobMessage(
+            job_id=job.id,
+            workspace_id=workspace_id,
+            traceparent=current_traceparent(),
+        )
+    )
     return document
 
 
