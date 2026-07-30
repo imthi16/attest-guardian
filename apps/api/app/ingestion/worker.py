@@ -23,24 +23,35 @@ import asyncio
 import hashlib
 import logging
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.chunking.chunker import PageInput, chunk_pages
 from app.chunking.provenance import ProvenanceError, validate_chunk_provenance
-from app.db.models.documents import Chunk, Document, DocumentVersion, Page
+from app.db.models.documents import (
+    EMBEDDING_DIMENSIONS,
+    Chunk,
+    Document,
+    DocumentVersion,
+    Page,
+)
 from app.db.models.enums import DocumentStatus, IngestionStage, IngestionStatus
 from app.db.models.operations import IngestionJob
 from app.db.repositories.audit import AuditLogRepository
+from app.db.repositories.embeddings import ChunkEmbeddingRepository
 from app.db.session import bind_workspace, session_scope
 from app.documents.keys import page_image_key
 from app.documents.purge import run_pending_purges
 from app.documents.validation import UploadRejectedError, detect_kind, verify_content
+from app.embeddings.service import EmbeddingService, build_embedding_provider
+from app.embeddings.types import DimensionMismatchError, EmbeddingVector
 from app.ingestion.queue import JobMessage, JobQueue
 from app.ingestion.scanner import MalwareScanner
+from app.language import detect_language
 from app.parsing.ocr import NullOcrEngine, OcrEngine
 from app.parsing.pdf import parse_pdf, render_pdf_page_png
 from app.parsing.text import parse_docx, parse_text
@@ -54,14 +65,6 @@ from app.storage.base import ObjectStorage
 logger = logging.getLogger("app.ingestion")
 
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-
-# Stages after chunking are placeholders until their features land
-# (#9 normalization, #10 embeddings/indexing).
-_PLACEHOLDER_STAGES = (
-    IngestionStage.NORMALIZING,
-    IngestionStage.EMBEDDING,
-    IngestionStage.INDEXING,
-)
 
 
 class JobVanishedError(Exception):
@@ -109,6 +112,7 @@ class IngestionWorker:
         scanner: MalwareScanner,
         ocr_engine: OcrEngine | None = None,
         injection_scanner: InjectionScanner | None = None,
+        embedding_service: EmbeddingService | None = None,
         scan_injection: bool = True,
         store_page_images: bool = True,
         chunk_max_chars: int = 1200,
@@ -121,6 +125,7 @@ class IngestionWorker:
         self._queue = queue
         self._scanner = scanner
         self._ocr_engine = ocr_engine or NullOcrEngine()
+        self._embeddings = embedding_service or EmbeddingService()
         self._injection_scanner = injection_scanner or InjectionScanner()
         self._scan_injection = scan_injection
         self._store_page_images = store_page_images
@@ -220,17 +225,20 @@ class IngestionWorker:
             return True
 
     async def _run_stages(self, message: JobMessage) -> None:
+        """Walk the stages in the order `IngestionStage` declares them.
+
+        Normalization runs before chunking because the chunker copies each
+        page's detected language onto every chunk it cuts from that page.
+        Embedding runs after chunking because it needs the persisted chunk ids.
+        """
         content = await self._stage_validate(message)
         await self._stage_scan(message, content)
         parsed = await self._stage_parse(message, content)
         await self._stage_ocr(message, content, parsed)
-        await self._stage_chunk(message, content, parsed)
-        for stage in _PLACEHOLDER_STAGES:
-            await self._advance_stage(message, stage)
-            logger.info(
-                "stage is a placeholder until its feature lands",
-                extra={"job_id": str(message.job_id), "stage": stage.value},
-            )
+        languages = await self._stage_normalize(message, content, parsed)
+        await self._stage_chunk(message, content, parsed, languages)
+        embedded = await self._stage_embed(message, content)
+        await self._stage_index(message, content, embedded)
 
     async def _advance_stage(self, message: JobMessage, stage: IngestionStage) -> None:
         async with session_scope(self._factory) as session:
@@ -391,11 +399,141 @@ class IngestionWorker:
             if version is not None:
                 version.page_count = len(parsed.pages)
 
+    async def _stage_normalize(
+        self,
+        message: JobMessage,
+        content: _LoadedContent,
+        parsed: ParsedDocument,
+    ) -> dict[int, str]:
+        """Detect each page's language and record it as provenance.
+
+        Stored text is *not* rewritten. Chunk content must stay byte-identical
+        to `page_text[char_start:char_end]` — `validate_chunk_provenance`
+        enforces that, and consumers apply `normalize_for_match` when they
+        compare rather than relying on a normalized copy in the database. So
+        normalization here means classification: the canonical form is used to
+        decide the language, and only the verdict is persisted.
+
+        An undetectable page records `unknown` rather than `NULL`. The
+        distinction is worth keeping: `unknown` is a verdict on a page with no
+        classifiable letters, while `NULL` means this stage never ran.
+        """
+        await self._advance_stage(message, IngestionStage.NORMALIZING)
+        languages = {
+            page.page_number: detect_language(page.text).language.value for page in parsed.pages
+        }
+        async with session_scope(self._factory) as session:
+            await bind_workspace(session, message.workspace_id)
+            for page_number, language in languages.items():
+                await session.execute(
+                    update(Page)
+                    .where(
+                        Page.document_version_id == content.version_id,
+                        Page.page_number == page_number,
+                    )
+                    .values(language=language)
+                )
+        logger.info(
+            "detected page languages",
+            extra={
+                "job_id": str(message.job_id),
+                "languages": sorted(set(languages.values())),
+                "pages": len(languages),
+            },
+        )
+        return languages
+
+    async def _stage_embed(
+        self,
+        message: JobMessage,
+        content: _LoadedContent,
+    ) -> list[tuple[uuid.UUID, EmbeddingVector]]:
+        """Embed this version's persisted chunks, preserving chunk order.
+
+        Reads the chunks back rather than embedding the drafts, so a vector is
+        only ever produced for text that actually reached the table with valid
+        provenance.
+
+        A provider failure propagates as `EmbeddingError`, which `process`
+        treats as transient and retries; a `DimensionMismatchError` is raised as
+        permanent instead, because a provider returning the wrong width will do
+        so again on the same input and no number of retries will fix it.
+        """
+        await self._advance_stage(message, IngestionStage.EMBEDDING)
+        async with session_scope(self._factory) as session:
+            await bind_workspace(session, message.workspace_id)
+            rows = (
+                await session.execute(
+                    select(Chunk.id, Chunk.content)
+                    .where(Chunk.document_version_id == content.version_id)
+                    .order_by(Chunk.chunk_index)
+                )
+            ).all()
+
+        if not rows:
+            logger.info("no chunks to embed", extra={"job_id": str(message.job_id)})
+            return []
+
+        # The provider can be perfectly self-consistent and still disagree with
+        # the schema: `chunk_embeddings.embedding` is a fixed-width
+        # `Vector(EMBEDDING_DIMENSIONS)` column, so a provider configured to a
+        # different width only fails at INSERT, as an opaque driver error that
+        # looks transient and burns every attempt before dead-lettering. Checking
+        # the declared width here turns a misconfigured `EMBEDDING_DIMENSIONS`
+        # into one clear, permanent failure that names both numbers.
+        if self._embeddings.dimensions != EMBEDDING_DIMENSIONS:
+            msg = (
+                f"embedding provider produces {self._embeddings.dimensions}-dim vectors "
+                f"but chunk_embeddings stores {EMBEDDING_DIMENSIONS}; "
+                "EMBEDDING_DIMENSIONS does not match the schema"
+            )
+            raise PermanentIngestionError(msg)
+
+        try:
+            result = self._embeddings.embed_texts([row.content for row in rows])
+        except DimensionMismatchError as error:
+            # The provider contradicted its own declaration; retrying the same
+            # text cannot change that either.
+            raise PermanentIngestionError(f"embedding provider misconfigured: {error}") from error
+
+        return [(row.id, vector) for row, vector in zip(rows, result.vectors, strict=True)]
+
+    async def _stage_index(
+        self,
+        message: JobMessage,
+        content: _LoadedContent,
+        embedded: Sequence[tuple[uuid.UUID, EmbeddingVector]],
+    ) -> None:
+        """Persist the vectors so dense retrieval can reach this document.
+
+        `upsert` is keyed by chunk and model version, so re-running a job
+        replaces vectors rather than accumulating them, and a model upgrade adds
+        a row instead of destroying the old one.
+        """
+        await self._advance_stage(message, IngestionStage.INDEXING)
+        if not embedded:
+            return
+        async with session_scope(self._factory) as session:
+            await bind_workspace(session, message.workspace_id)
+            repository = ChunkEmbeddingRepository(session, message.workspace_id)
+            for chunk_id, vector in embedded:
+                await repository.upsert(chunk_id, vector)
+        logger.info(
+            "indexed embeddings",
+            extra={
+                "job_id": str(message.job_id),
+                "chunks": len(embedded),
+                "model": self._embeddings.model,
+                "model_version": self._embeddings.model_version,
+            },
+        )
+
     async def _stage_chunk(
         self,
         message: JobMessage,
         content: _LoadedContent,
         parsed: ParsedDocument,
+        languages: Mapping[int, str],
     ) -> None:
         """Chunk parsed pages and persist only provenance-validated chunks."""
         await self._advance_stage(message, IngestionStage.CHUNKING)
@@ -403,6 +541,11 @@ class IngestionWorker:
             PageInput(
                 page_number=page.page_number,
                 text=page.text,
+                # From the normalization stage, so every chunk carries the
+                # language its page was detected as. Without this the column is
+                # silently NULL and citation and verification lose a provenance
+                # field they are required to have.
+                language=languages.get(page.page_number),
                 ocr_engine=page.ocr_engine,
                 ocr_confidence=page.ocr_confidence,
             )
@@ -688,6 +831,9 @@ def _main() -> None:
                 )
             )
         ),
+        # Same construction retrieval queries with, so a document is indexed
+        # under exactly the model and version a search will look for.
+        embedding_service=EmbeddingService(build_embedding_provider(settings)),
         scan_injection=settings.injection_scan_enabled,
         store_page_images=settings.ingestion_store_page_images,
         chunk_max_chars=settings.chunk_max_chars,

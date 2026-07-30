@@ -132,7 +132,13 @@ Repository layout and intended ownership per directory:
   (`make dev-worker`, `python -m app.ingestion.worker`) claims jobs by compare-and-set (duplicate
   delivery safe), walks stage enums committed per transition, retries transient failures, and
   dead-letters after `INGESTION_MAX_ATTEMPTS`; quarantine (EICAR placeholder scanner) and
-  integrity failures never retry. Worker tests use dedicated committed DBs
+  integrity failures never retry. `_run_stages` must follow `IngestionStage` declaration
+  order: normalize before chunk (the chunker copies each page's detected language onto its
+  chunks), embed/index after chunk (they need persisted chunk ids). Normalizing classifies
+  and never rewrites stored text — consumers apply `normalize_for_match` at read time, and
+  rewriting would break `validate_chunk_provenance`. A wrong-width embedding provider is a
+  *permanent* failure (`DimensionMismatchError`); every other embedding failure is transient.
+  Worker tests use dedicated committed DBs
   (`attest_worker_test`, `attest_parsing_test`), not the rolled-back `db_session`.
   Parsing (`app/parsing/`): pypdf → pdfium fallback, scanned-page heuristic (<24 chars),
   `OcrEngine` protocol (`tesseract` adapter or `none` → `ocr_engine="unavailable"` provenance);
