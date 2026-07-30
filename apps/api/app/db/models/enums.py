@@ -70,9 +70,9 @@ class IngestionStatus(enum.Enum):
 class IngestionStage(enum.Enum):
     """The furthest pipeline stage an ingestion job has reached.
 
-    Parsing through indexing are placeholders until their dedicated
-    features land; the worker still walks every stage so the progression
-    is observable end to end.
+    Every stage now does real work, and the worker advances through them in
+    declaration order, so the progression is both observable and meaningful:
+    a job reporting `EMBEDDING` really is being embedded.
     """
 
     UPLOADED = "uploaded"

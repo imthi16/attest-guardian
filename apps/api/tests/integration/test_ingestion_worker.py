@@ -12,15 +12,25 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.config import Settings
-from app.db.models.documents import Chunk, Document, DocumentVersion
+from app.db.models.documents import (
+    EMBEDDING_DIMENSIONS,
+    Chunk,
+    ChunkEmbedding,
+    Document,
+    DocumentVersion,
+    Page,
+)
 from app.db.models.enums import DocumentStatus, IngestionStage, IngestionStatus
 from app.db.models.operations import AuditLog, IngestionJob
+from app.embeddings.service import EmbeddingService
+from app.embeddings.testing import FailingEmbeddingProvider, StaticEmbeddingProvider
+from app.embeddings.types import EmbeddingProvider
 from app.ingestion.queue import JobMessage, RedisJobQueue
 from app.ingestion.scanner import EICAR_SIGNATURE, SignatureScanner
 from app.ingestion.worker import IngestionWorker
 from app.storage.base import ObjectStorage
 from app.storage.s3 import S3ObjectStorage
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -145,12 +155,22 @@ def build_worker(
     queue: RedisJobQueue,
     *,
     max_attempts: int = 3,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> IngestionWorker:
+    # A deterministic provider at the schema's real width: `chunk_embeddings`
+    # declares `Vector(EMBEDDING_DIMENSIONS)`, so a narrower test vector would
+    # be rejected by the column rather than by anything under test.
+    provider = embedding_provider or StaticEmbeddingProvider(
+        dimensions=EMBEDDING_DIMENSIONS,
+        model="worker-test",
+        model_version="v1",
+    )
     return IngestionWorker(
         session_factory=factory,
         storage=storage,
         queue=queue,
         scanner=SignatureScanner(),
+        embedding_service=EmbeddingService(provider),
         max_attempts=max_attempts,
         stale_after_seconds=300,
     )
@@ -546,3 +566,193 @@ async def test_job_deleted_mid_run_does_not_stop_the_worker(
     job, document = await load_state(factory, followup)
     assert job.status is IngestionStatus.SUCCEEDED
     assert document.status is DocumentStatus.READY
+
+
+async def test_ready_document_is_normalized_embedded_and_indexed(
+    factory: async_sessionmaker[AsyncSession],
+    storage: S3ObjectStorage,
+    queue: RedisJobQueue,
+) -> None:
+    """The pipeline must finish the job, not stop at chunking.
+
+    These three stages were placeholders, which meant a document reached
+    `READY` with no vectors and no language provenance — dense retrieval had
+    nothing to match, and every `chunks.language` was NULL.
+    """
+    seeded = await seed_job(factory, storage)
+    await queue.enqueue(seeded.message)
+    worker = build_worker(factory, storage, queue)
+
+    assert await worker.process_next(0) is True
+    job, document = await load_state(factory, seeded)
+    assert job.status is IngestionStatus.SUCCEEDED
+    assert document.status is DocumentStatus.READY
+
+    async with factory() as session:
+        chunks = (
+            await session.scalars(
+                select(Chunk)
+                .join(DocumentVersion, Chunk.document_version_id == DocumentVersion.id)
+                .where(DocumentVersion.document_id == seeded.document_id)
+                .order_by(Chunk.chunk_index)
+            )
+        ).all()
+        assert chunks, "the fixture document must produce chunks"
+        # Provenance: every chunk carries the language of the page it came from.
+        assert all(chunk.language for chunk in chunks)
+
+        pages = (
+            await session.scalars(
+                select(Page)
+                .join(DocumentVersion, Page.document_version_id == DocumentVersion.id)
+                .where(DocumentVersion.document_id == seeded.document_id)
+            )
+        ).all()
+        assert pages and all(page.language for page in pages)
+
+        embeddings = (
+            await session.scalars(
+                select(ChunkEmbedding).where(
+                    ChunkEmbedding.chunk_id.in_([chunk.id for chunk in chunks])
+                )
+            )
+        ).all()
+
+    # One vector per chunk, at the schema's width, tagged with the model that
+    # produced it so retrieval can ask for exactly this version.
+    assert len(embeddings) == len(chunks)
+    assert {embedding.chunk_id for embedding in embeddings} == {chunk.id for chunk in chunks}
+    assert all(embedding.dimensions == EMBEDDING_DIMENSIONS for embedding in embeddings)
+    assert {embedding.model for embedding in embeddings} == {"worker-test"}
+
+
+async def test_stage_transitions_follow_the_declared_order(
+    factory: async_sessionmaker[AsyncSession],
+    storage: S3ObjectStorage,
+    queue: RedisJobQueue,
+) -> None:
+    """A job's stage must never move backwards while it runs.
+
+    Chunking used to run before the worker advanced through `NORMALIZING`, so
+    the recorded stage went `CHUNKING` and then back to `NORMALIZING`.
+    """
+    seeded = await seed_job(factory, storage)
+    await queue.enqueue(seeded.message)
+    worker = build_worker(factory, storage, queue)
+
+    order = list(IngestionStage)
+    seen: list[IngestionStage] = []
+    original = worker._advance_stage  # noqa: SLF001 - observing real transitions
+
+    async def record(message: JobMessage, stage: IngestionStage) -> None:
+        seen.append(stage)
+        await original(message, stage)
+
+    worker._advance_stage = record  # type: ignore[method-assign]  # noqa: SLF001
+    assert await worker.process_next(0) is True
+
+    assert IngestionStage.NORMALIZING in seen
+    assert IngestionStage.EMBEDDING in seen
+    assert IngestionStage.INDEXING in seen
+    assert [order.index(stage) for stage in seen] == sorted(order.index(stage) for stage in seen)
+
+
+async def test_reindexing_replaces_vectors_rather_than_duplicating_them(
+    factory: async_sessionmaker[AsyncSession],
+    storage: S3ObjectStorage,
+    queue: RedisJobQueue,
+) -> None:
+    """A retry must not leave a document with two vectors per chunk."""
+    seeded = await seed_job(factory, storage)
+    await queue.enqueue(seeded.message)
+    worker = build_worker(factory, storage, queue)
+    assert await worker.process_next(0) is True
+
+    async def vector_count() -> int:
+        async with factory() as session:
+            return await session.scalar(  # type: ignore[return-value]
+                select(func.count())
+                .select_from(ChunkEmbedding)
+                .where(ChunkEmbedding.workspace_id == seeded.workspace_id)
+            )
+
+    first = await vector_count()
+    assert first > 0
+
+    # Re-run the same document through a fresh job, as a retry would.
+    async with factory() as session, session.begin():
+        job = IngestionJob(
+            workspace_id=seeded.workspace_id,
+            document_id=seeded.document_id,
+            status=IngestionStatus.QUEUED,
+        )
+        session.add(job)
+        await session.flush()
+        replay = JobMessage(job_id=job.id, workspace_id=seeded.workspace_id)
+
+    await queue.enqueue(replay)
+    assert await worker.process_next(0) is True
+    assert await vector_count() == first
+
+
+async def test_a_wrong_width_provider_fails_permanently(
+    factory: async_sessionmaker[AsyncSession],
+    storage: S3ObjectStorage,
+    queue: RedisJobQueue,
+) -> None:
+    """A misconfigured provider cannot be fixed by retrying the same bytes.
+
+    Every other embedding failure is transient and worth another attempt, but a
+    provider returning the wrong width will return it again, so the job is
+    dead-lettered immediately instead of burning its attempts.
+    """
+    seeded = await seed_job(factory, storage)
+    await queue.enqueue(seeded.message)
+    worker = build_worker(
+        factory,
+        storage,
+        queue,
+        embedding_provider=StaticEmbeddingProvider(dimensions=EMBEDDING_DIMENSIONS - 1),
+    )
+
+    assert await worker.process_next(0) is True
+    job, document = await load_state(factory, seeded)
+    assert job.status is IngestionStatus.FAILED
+    assert job.attempts == 1, "a permanent failure must not consume further attempts"
+    assert job.permanent_failure is True
+    assert "misconfigured" in (job.error or "")
+    assert document.status is DocumentStatus.FAILED
+    assert await queue.list_dead() == [seeded.message]
+
+
+async def test_a_transient_embedding_failure_retries_then_succeeds(
+    factory: async_sessionmaker[AsyncSession],
+    storage: S3ObjectStorage,
+    queue: RedisJobQueue,
+) -> None:
+    """A provider outage is transient: the same bytes can succeed later."""
+    seeded = await seed_job(factory, storage)
+    await queue.enqueue(seeded.message)
+    flaky = FailingEmbeddingProvider(
+        StaticEmbeddingProvider(dimensions=EMBEDDING_DIMENSIONS, model="worker-test"),
+        failures=1,
+    )
+    worker = build_worker(factory, storage, queue, embedding_provider=flaky)
+
+    await worker.process_next(0)
+    job, _ = await load_state(factory, seeded)
+    assert job.status is IngestionStatus.QUEUED
+    assert job.permanent_failure is False
+
+    await worker.process_next(0)
+    job, document = await load_state(factory, seeded)
+    assert job.status is IngestionStatus.SUCCEEDED
+    assert document.status is DocumentStatus.READY
+
+    async with factory() as session:
+        indexed = await session.scalar(
+            select(func.count())
+            .select_from(ChunkEmbedding)
+            .where(ChunkEmbedding.workspace_id == seeded.workspace_id)
+        )
+    assert indexed and indexed > 0

@@ -90,6 +90,26 @@ workspace, and cosine search filters by workspace and model version so
 unauthorized vectors never leave the data layer. Telemetry records counts and
 the model, never document text.
 
+The ingestion worker writes those rows. Its `NORMALIZING`, `EMBEDDING`, and
+`INDEXING` stages do real work and run in the order `IngestionStage` declares:
+
+- **Normalize** detects each page's language and records it on `pages.language`,
+  which the chunker then copies onto every chunk cut from that page. It runs
+  before chunking for that reason, and it does *not* rewrite stored text —
+  chunk content must stay byte-identical to `page_text[char_start:char_end]`, so
+  consumers apply `normalize_for_match` when they compare instead. A page with
+  no classifiable letters records `unknown`; `NULL` would mean the stage never
+  ran, and that distinction is worth keeping.
+- **Embed** reads the persisted chunks back rather than embedding the drafts, so
+  a vector exists only for text that reached the table with valid provenance.
+- **Index** upserts by chunk and model version, so re-running a job replaces
+  vectors instead of accumulating them while a model upgrade still adds a row.
+
+Failure handling splits on whether another attempt could plausibly differ: a
+provider returning the wrong vector width is a `PermanentIngestionError`,
+because it will do so again on the same input, while every other embedding
+failure is transient and retried like any other stage's.
+
 ## Permission-filtered hybrid retrieval
 
 `app.retrieval` answers a workspace query by running two retrievers and fusing
