@@ -16,13 +16,17 @@ quality.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 
-from app.language import normalize_for_match
+from app.language import normalize_for_match, tokenize
 from app.reranking.types import RerankItem, RerankScore
 
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+# Word tokens come from `app.language.tokenize`, never from a local regex.
+# The idiomatic `[^\W_]+` is wrong for every abugida this platform supports:
+# Python's `\w` covers letters and digits but not the Unicode mark categories,
+# and a Tamil vowel sign is a spacing combining mark, so `விமான` would split
+# into the bare consonants `வ`, `ம`, `ன`. Unrelated Tamil passages then share
+# most of their "tokens" and score as near-identical.
 
 
 class LocalLexicalReranker:
@@ -68,7 +72,7 @@ class LocalLexicalReranker:
     def _features(self, text: str) -> set[str]:
         """Unigrams plus character trigrams over normalized text."""
         normalized = normalize_for_match(text)
-        tokens = _TOKEN.findall(normalized)
+        tokens = tokenize(normalized)
         features: set[str] = set(tokens)
         for token in tokens:
             padded = f"#{token}#"

@@ -23,16 +23,20 @@ dropping a true-but-unverified claim is safer than surfacing an unsupported one.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.language import normalize_for_match
+from app.language import match_tokens
 from app.rag.generation import CandidateClaim
 from app.rag.types import AtomicClaim, Citation, ClaimVerdict, EvidencePassage
 from app.verification import EntailmentAnalyzer, EntailmentVerdict, get_default_analyzer
 
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+# Word tokens come from `app.language.tokenize`, never from a local regex.
+# The idiomatic `[^\W_]+` is wrong for every abugida this platform supports:
+# Python's `\w` covers letters and digits but not the Unicode mark categories,
+# and a Tamil vowel sign is a spacing combining mark, so `விமான` would split
+# into the bare consonants `வ`, `ம`, `ன`. Unrelated Tamil passages then share
+# most of their "tokens" and score as near-identical.
 
 # How an entailment outcome maps onto the persisted claim verdict. "Partial"
 # support has no dedicated persisted value and is not safe to assert whole, so
@@ -256,7 +260,7 @@ class ClaimVerifier:
         )
 
     def _tokens(self, text: str) -> set[str]:
-        return set(_TOKEN.findall(normalize_for_match(text)))
+        return match_tokens(text)
 
 
 def _clamp(value: float) -> float:

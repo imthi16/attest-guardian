@@ -23,15 +23,19 @@ from __future__ import annotations
 
 import hashlib
 import math
-import re
 from collections.abc import Sequence
 
 from app.embeddings.types import EmbeddingResult, EmbeddingVector
-from app.language import normalize_for_match
+from app.language import normalize_for_match, tokenize
 
 BGE_M3_DIMENSIONS = 1024
 
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+# Word tokens come from `app.language.tokenize`, never from a local regex.
+# The idiomatic `[^\W_]+` is wrong for every abugida this platform supports:
+# Python's `\w` covers letters and digits but not the Unicode mark categories,
+# and a Tamil vowel sign is a spacing combining mark, so `விமான` would split
+# into the bare consonants `வ`, `ம`, `ன`. Unrelated Tamil passages then share
+# most of their "tokens" and score as near-identical.
 
 
 class LocalHashingEmbeddingProvider:
@@ -42,7 +46,7 @@ class LocalHashingEmbeddingProvider:
         *,
         dimensions: int = BGE_M3_DIMENSIONS,
         model: str = "bge-m3-local",
-        model_version: str = "hashing-v1",
+        model_version: str = "hashing-v2",
     ) -> None:
         if dimensions < 1:
             msg = "dimensions must be positive"
@@ -81,7 +85,7 @@ class LocalHashingEmbeddingProvider:
         spelling variation without any language-specific tables.
         """
         normalized = normalize_for_match(text)
-        tokens = _TOKEN.findall(normalized)
+        tokens = tokenize(normalized)
         features = list(tokens)
         for token in tokens:
             padded = f"#{token}#"

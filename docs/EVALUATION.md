@@ -139,12 +139,17 @@ scored 0.5 lexical overlap. The evaluation's Tamil numbers were excellent for en
 reason.
 
 `app.language.tokenize` is the corrected primitive — a character belongs to a word if it is
-alphanumeric *or* a Unicode mark, which keeps a vowel sign bound to its consonant. The harness uses
-it. **The six product modules still use the broken regex** and want their own change, because
-switching the embedding provider's tokenizer changes every stored vector and is not something to
-bundle into an evaluation PR. With the harness corrected, Tamil citation precision went from 0.67
-to 1.00 and both Tamil abstention cases began refusing correctly — a measure of how much the
-artefact was flattering the results.
+alphanumeric *or* a Unicode mark, which keeps a vowel sign bound to its consonant. With the harness
+corrected, Tamil citation precision went from 0.67 to 1.00 and both Tamil abstention cases began
+refusing correctly, which is a measure of how much the artefact was flattering the results.
+
+The product modules were corrected separately, and the embedding version moved with them
+(`hashing-v1` → `hashing-v2`): the version salts the hashing trick and scopes every vector search,
+so leaving it would have meant comparing vectors built from consonant fragments against queries
+built from whole words. Note what this evaluation *cannot* show — the harness substitutes the
+retriever, so a regression in the product's own tokenizer would not move any metric here. The
+regression contract for those modules is `apps/api/tests/test_tamil_tokenization.py`, which pairs
+Tamil sentences that share nothing and asserts each module can tell them apart.
 
 **An OCR reading with no recorded confidence scored as perfectly reliable.**
 `ClaimVerifier._confidence` had three OCR states and two branches: born-digital text and a recorded

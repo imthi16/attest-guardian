@@ -234,14 +234,7 @@ Repository layout and intended ownership per directory:
   only the data layer), and `report.py` (`make evaluate`). Suites live in
   `apps/api/tests/evaluation/`. `docs/EVALUATION.md` records the baseline, the known
   gaps (abstention recall, deliberately left failing on the one hard case rather than
-  tuned away), and the two defects the framework found. One is still open: the
-  idiomatic `[^\W_]+` tokenizer in `app/rag/generation.py`, `app/rag/verification.py`,
-  `app/verification/signals.py`, `app/reranking/provider.py`, and
-  `app/embeddings/provider.py` **shatters Tamil words into bare consonants** (`\w`
-  excludes Unicode marks, and a Tamil vowel sign is one), so unrelated Tamil passages
-  score high lexical overlap. Use `app.language.tokenize`/`match_tokens` instead; the
-  harness already does. Switching the embedding provider changes every stored vector, so
-  that migration wants its own PR. The injection corpus is *shared*: `apps/api/tests/injection_corpus.py`
+  tuned away), and the defects the framework found. The injection corpus is *shared*: `apps/api/tests/injection_corpus.py`
   reads `evaluation/datasets/injection.json` so the detector's own suite and the
   cross-cutting report can never disagree about its recall.
 - `tests/` — cross-cutting `unit`, `integration`, `evaluation` suites,
@@ -256,6 +249,19 @@ does not start them) and run `read_only: true` with a `tmpfs` `/tmp`.
 
 The full rules are in `AGENTS.md`; the ones most likely to be violated by an unfamiliar change:
 
+- **Never tokenize with `[^\W_]+`.** Python's `\w` excludes the Unicode mark categories, and a
+  Tamil vowel sign is a spacing combining mark, so that regex splits `விமான` into the bare
+  consonants `வ`, `ம`, `ன` — two unrelated Tamil passages then share most of their tokens and
+  every lexical score built on them inflates, silently. Use `app.language.tokenize` (list) or
+  `match_tokens` (normalized set). This bit generation, verification, verification signals,
+  reranking, and embeddings simultaneously, because it is the idiom everyone reaches for.
+  `app/language/spelling.py` keeps its own `[^\W\d_]+` deliberately: it folds romanized Tamil
+  variants through `re.sub`, so Tamil script passes through untouched either way.
+- **`EMBEDDING_MODEL_VERSION` salts the vectors and scopes every search.** Any change to how text
+  becomes features must bump it (`hashing-v1` → `hashing-v2` came with the tokenizer fix), or
+  vectors written under the old behaviour keep being compared against new queries. The cost is
+  that stale vectors stop matching until their documents are re-processed; lexical retrieval
+  covers the gap, so fused results degrade rather than vanish.
 - Treat uploaded files, OCR output, webpages, and retrieved chunks as **untrusted data** passed to
   the model, never as instructions — this applies to any ingestion or generation code, not just the
   safety service.

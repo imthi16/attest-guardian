@@ -26,11 +26,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from app.language import normalize_for_match
+from app.language import normalize_for_match, tokenize
 from app.rag.types import EvidencePassage
 
 _SENTENCE = re.compile(r"[^.!?।॥\n]+[.!?।॥]?", re.UNICODE)
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+# Word tokens come from `app.language.tokenize`, never from a local regex.
+# The idiomatic `[^\W_]+` is wrong for every abugida this platform supports:
+# Python's `\w` covers letters and digits but not the Unicode mark categories,
+# and a Tamil vowel sign is a spacing combining mark, so `விமான` would split
+# into the bare consonants `வ`, `ம`, `ன`. Unrelated Tamil passages then share
+# most of their "tokens" and score as near-identical.
 
 
 class GenerationError(Exception):
@@ -172,7 +177,7 @@ class ExtractiveGenerator:
 
     def _features(self, text: str) -> set[str]:
         """Unigrams plus character trigrams over normalized text."""
-        tokens = _TOKEN.findall(normalize_for_match(text))
+        tokens = tokenize(normalize_for_match(text))
         features: set[str] = set(tokens)
         for token in tokens:
             padded = f"#{token}#"
