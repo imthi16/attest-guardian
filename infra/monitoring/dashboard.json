@@ -1,0 +1,244 @@
+{
+  "title": "Attest Guardian",
+  "uid": "attest-guardian",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "tags": [
+    "attest",
+    "rag"
+  ],
+  "description": "Every panel is built from metrics that carry no identifier and no tenant content, so this dashboard can be shared with anyone who needs to operate the service without granting them access to what users asked or uploaded. Finding *which* workspace is affected is deliberately a separate step, through the logs, where authorization applies.",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate by status class",
+      "description": "Traffic and its shape. A 4xx spike with flat 2xx is usually a client or auth change; a 5xx spike is ours.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(attest_http_requests_total[5m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Request latency p95 by route",
+      "description": "Routes are templates, never resolved paths: a label carrying real ids would grow without bound and publish the tenant list.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(attest_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{route}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Answer outcomes",
+      "description": "Labelled by decision rather than outcome, because three different decisions all report `abstained` and telling them apart is the difference between 'there is nothing here' and 'the evidence contradicts itself'.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (decision) (rate(attest_answers_total[15m]))",
+          "legendFormat": "{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Abstention share",
+      "description": "The panel to watch. A rising abstention rate is not an error and appears in no error metric \u2014 the API returns 200 and the pipeline behaves as designed while users stop getting answers. It is the earliest signal that retrieval regressed or a corpus went stale.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(attest_answers_total{outcome=\"abstained\"}[30m])) / clamp_min(sum(rate(attest_answers_total[30m])), 0.001)",
+          "legendFormat": "abstained",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Claim verdicts",
+      "description": "Unsupported and contradicted claims are dropped before the answer, so they are visible here and nowhere else. A rise means answers are getting thinner while still looking correct.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (verdict) (rate(attest_claims_total[15m]))",
+          "legendFormat": "{{verdict}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Answer latency p95",
+      "description": "End to end through retrieve, rerank, generate, and verify.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(attest_answer_duration_seconds_bucket[15m])))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Ingestion stage throughput",
+      "description": "Flat at zero with a non-empty queue means a worker died mid-job.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage) (rate(attest_ingestion_stages_total[15m]))",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Ingestion stage p95",
+      "description": "OCR dominates on scanned documents; a rise elsewhere is worth reading.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(attest_ingestion_stage_duration_seconds_bucket[30m])))",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Model provider calls",
+      "description": "Embedding, rerank, and OCR providers. Errors here degrade retrieval quality before they ever fail a request.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (kind, result) (rate(attest_model_calls_total[10m]))",
+          "legendFormat": "{{kind}} {{result}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}
