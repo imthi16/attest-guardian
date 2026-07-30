@@ -890,3 +890,322 @@ h2 {
   gap: 0.75rem;
   margin: 2.5rem 0 0;
 }
+
+/* ------------------------------------------------------------ conversations */
+
+.start-thread-form,
+.delete-thread-form {
+  max-width: 44rem;
+  margin: 1.5rem 0 0;
+}
+
+.thread-list {
+  max-width: 44rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.thread-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--panel);
+}
+
+.thread-time {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* One turn per list item; the tone border makes a refusal visibly different
+   from a confident answer without relying on colour alone. */
+.thread {
+  max-width: 48rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.turn {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 0.6rem;
+  background: var(--panel);
+}
+
+.turn[data-role="user"] {
+  background: var(--paper);
+  border-left-color: var(--line);
+}
+
+.turn[data-tone="answered"] {
+  border-left-color: var(--accent);
+}
+
+.turn[data-tone="caution"],
+.turn[data-tone="review"] {
+  border-left-color: var(--warning);
+}
+
+.turn[data-tone="refused"] {
+  border-left-color: var(--danger);
+}
+
+.turn-label {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.answer-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.question-text,
+.answer-text {
+  margin: 0.5rem 0 0;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.question-reading,
+.answer-explanation,
+.answer-reason,
+.claims-empty {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.answer-badge,
+.verdict-badge {
+  display: inline-block;
+  margin: 0;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.answer-badge[data-tone="answered"],
+.verdict-badge[data-tone="answered"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent-dark);
+}
+
+.answer-badge[data-tone="caution"],
+.verdict-badge[data-tone="caution"],
+.answer-badge[data-tone="review"],
+.verdict-badge[data-tone="review"] {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  color: var(--warning);
+}
+
+.answer-badge[data-tone="refused"],
+.verdict-badge[data-tone="refused"] {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+.confidence-meter {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}
+
+.confidence-label {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.claim-list {
+  margin: 1rem 0 0;
+  padding: 0 0 0 1.25rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.claim-text {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.claim-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.4rem 0 0;
+}
+
+.claim-verifier {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* ---------------------------------------------------------------- evidence */
+
+.citation-button {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0 0;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.citation-marker {
+  display: inline-grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--panel);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.evidence-card {
+  margin: 0.75rem 0 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+}
+
+.evidence-provenance {
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.evidence-document {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.evidence-quote {
+  margin: 0.6rem 0 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.evidence-quote mark {
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  color: var(--ink);
+  /* Underline as well as highlight, so the cited span is distinguishable
+     without relying on colour perception. */
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+}
+
+.evidence-loading {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* ---------------------------------------------------------------- composer */
+
+.composer {
+  max-width: 48rem;
+  margin: 1.75rem 0 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--panel);
+}
+
+.composer-input,
+.feedback-note {
+  width: 100%;
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+.composer-progress {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.answer-feedback {
+  margin: 1rem 0 0;
+}
+
+.feedback-fieldset {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.5rem;
+}
+
+.feedback-legend {
+  padding: 0 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.feedback-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+@media (max-width: 40rem) {
+  .thread-summary {
+    flex-direction: column;
+  }
+
+  .feedback-buttons button {
+    width: 100%;
+  }
+}

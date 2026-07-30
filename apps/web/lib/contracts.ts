@@ -139,6 +139,125 @@ export const uploadPolicySchema = z.object({
 });
 export type UploadPolicy = z.infer<typeof uploadPolicySchema>;
 
+export const answerStatusSchema = z.enum(["answered", "partial", "abstained"]);
+export type AnswerStatus = z.infer<typeof answerStatusSchema>;
+
+export const claimVerdictSchema = z.enum(["supported", "unsupported", "contradicted", "ambiguous"]);
+export type ClaimVerdict = z.infer<typeof claimVerdictSchema>;
+
+/**
+ * The calibrated operational decision. Distinct from `answer_status`: three
+ * different decisions all surface as `abstained`, and only this says which.
+ */
+export const answerDecisionSchema = z.enum([
+  "answer",
+  "answer_with_warning",
+  "ask_for_clarification",
+  "abstain",
+  "escalate_for_review",
+]);
+export type AnswerDecision = z.infer<typeof answerDecisionSchema>;
+
+export const conversationSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type Conversation = z.infer<typeof conversationSchema>;
+
+export const conversationListSchema = z.array(conversationSchema);
+
+/**
+ * One persisted evidence span. `document_version_id` is what makes a stored
+ * citation resolvable, so evidence stays reachable after the response that
+ * produced it is gone.
+ */
+export const citationRecordSchema = z.object({
+  chunk_id: z.string(),
+  document_id: z.string(),
+  document_version_id: z.string(),
+  claim_text: z.string(),
+  quote_text: z.string(),
+  quote_start: z.number().int().nonnegative(),
+  quote_end: z.number().int().nonnegative(),
+  page_number: z.number().int().nullable(),
+});
+export type CitationRecord = z.infer<typeof citationRecordSchema>;
+
+export const claimRecordSchema = z.object({
+  claim_index: z.number().int().nonnegative(),
+  claim_text: z.string(),
+  verdict: claimVerdictSchema,
+  confidence: z.number(),
+  verifier: z.string(),
+});
+export type ClaimRecord = z.infer<typeof claimRecordSchema>;
+
+/**
+ * One turn. `content` is tenant text — a question someone typed or an answer
+ * composed from their documents — so it is rendered as a text child only.
+ */
+export const conversationMessageSchema = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant", "system"]),
+  content: z.string(),
+  language: z.string().nullable(),
+  normalized_content: z.string().nullable(),
+  transliterated_content: z.string().nullable(),
+  answer_status: answerStatusSchema.nullable(),
+  decision: answerDecisionSchema.nullable(),
+  decision_reason: z.string().nullable(),
+  confidence: z.number().nullable(),
+  abstention_reason: z.string().nullable(),
+  created_at: z.string(),
+  citations: z.array(citationRecordSchema),
+  claims: z.array(claimRecordSchema),
+});
+export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
+
+export const conversationDetailSchema = z.object({
+  conversation: conversationSchema,
+  messages: z.array(conversationMessageSchema),
+});
+export type ConversationDetail = z.infer<typeof conversationDetailSchema>;
+
+/** A citation proven against stored provenance, for the evidence panel. */
+export const resolvedCitationSchema = z.object({
+  document_id: z.string(),
+  document_title: z.string(),
+  document_version_id: z.string(),
+  version_number: z.number().int(),
+  chunk_id: z.string(),
+  chunk_index: z.number().int(),
+  page_number: z.number().int().nullable(),
+  section: z.string().nullable(),
+  language: z.string().nullable(),
+  quote: z.string(),
+  quote_char_start: z.number().int(),
+  quote_char_end: z.number().int(),
+  page_quote_char_start: z.number().int(),
+  page_quote_char_end: z.number().int(),
+  supporting_text: z.string(),
+  ocr_engine: z.string().nullable(),
+});
+export type ResolvedCitation = z.infer<typeof resolvedCitationSchema>;
+
+export const feedbackRatingSchema = z.enum(["helpful", "unhelpful", "incorrect"]);
+export type FeedbackRating = z.infer<typeof feedbackRatingSchema>;
+
+export const messageFeedbackSchema = z.object({
+  id: z.string(),
+  message_id: z.string(),
+  rating: feedbackRatingSchema,
+  note: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type MessageFeedback = z.infer<typeof messageFeedbackSchema>;
+
+export const messageFeedbackListSchema = z.array(messageFeedbackSchema);
+
 /**
  * The API's stable error envelope: `{"detail": {"code", "message"}}`. Clients
  * branch on `code`; `message` is human wording and may change.
@@ -152,7 +271,11 @@ export const apiErrorDetailSchema = z.object({
 
 /** Error codes the UI reacts to specifically. */
 export const errorCodes = {
+  answerFailed: "answer_failed",
   cannotManageRole: "cannot_manage_role",
+  citationNotFound: "citation_not_found",
+  citationOutOfRange: "citation_out_of_range",
+  conversationNotFound: "conversation_not_found",
   contentMismatch: "content_mismatch",
   documentArchived: "document_archived",
   documentDeleteRequiresArchive: "document_delete_requires_archive",
@@ -160,6 +283,7 @@ export const errorCodes = {
   documentNotRetryable: "document_not_retryable",
   duplicateDocument: "duplicate_document",
   emailAlreadyRegistered: "email_already_registered",
+  feedbackRequiresAnswer: "feedback_requires_answer",
   emptyFile: "empty_file",
   fileTooLarge: "file_too_large",
   insufficientRole: "insufficient_role",
@@ -167,6 +291,7 @@ export const errorCodes = {
   invalidRefreshToken: "invalid_refresh_token",
   lastOwner: "last_owner",
   memberAlreadyExists: "member_already_exists",
+  messageNotFound: "message_not_found",
   mimeMismatch: "mime_mismatch",
   notAuthenticated: "not_authenticated",
   rateLimited: "rate_limited",

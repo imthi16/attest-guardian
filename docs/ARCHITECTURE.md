@@ -209,6 +209,46 @@ Deleting a conversation removes its turns and citations but never the evidence:
 `citations.chunk_id` is `ondelete=RESTRICT`, which protects a cited chunk from
 disappearing under an answer rather than making the answer undeletable.
 
+## The chat and evidence surface
+
+`/workspaces/{id}/conversations` lists threads; `/conversations/{conversationId}` renders
+one. Reading a thread needs `view` — the answers come from documents the reader may
+already open — while asking, reviewing, and deleting need `converse`, so a viewer sees the
+thread and an explanation rather than a composer. The API re-authorizes regardless.
+
+Asking posts to a route handler rather than a server action, because an action returns once
+and cannot report progress. The handler verifies `Origin` (as the upload relay does, and for
+the same `SameSite=Lax` reason), bounds the question length, and pipes the API's events
+through untouched — re-encoding them would risk the relay disagreeing with the API about
+what the answer was.
+
+Progress is real: the labels in `lib/answer-stages.ts` map LangGraph node names, so
+"Searching your documents…" means the retrieve node finished. The **answer is not streamed
+word by word** — generation is extractive, so no partial text is safe to display — and once
+it lands the page calls `router.refresh()`. Nothing is painted from client state, so what a
+reader sees is what was persisted, including the decision and confidence that are not
+recoverable from the answer text. Cancelling aborts the request; the API only persists an
+answer from a terminal result, so an abandoned question leaves none.
+
+Every outcome has explicit wording in `components/answer-state.tsx`, keyed on the
+*decision* rather than the status: three decisions all report `abstained`, and telling them
+apart is the difference between "there is nothing here", "ask me differently", and "a human
+should look at this". Claim verdicts and a banded confidence sit alongside, because a bare
+percentage invites false precision.
+
+The evidence panel resolves a citation through `/citations/resolve` when it is opened — on
+open rather than up front, because resolution is audited and auditing unopened citations
+would describe reading that never happened — and renders `supporting_text`, the text read
+back from the stored document at validated offsets. It never renders the quote the answer
+supplied. A citation that does not match its source shows a failure instead of the
+passage, which is the whole point: displaying the model's version of a passage as though
+the document said it is the failure this platform exists to prevent. The highlight is built
+by slicing the string, and falls back to no highlight if the offsets do not fit rather than
+marking the wrong words.
+
+Question text, answer text, claim text, quotes, and thread titles are all tenant content
+and are rendered as text children throughout.
+
 ## Permission-filtered hybrid retrieval
 
 `app.retrieval` answers a workspace query by running two retrievers and fusing
