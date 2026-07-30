@@ -42,6 +42,9 @@ const resolved = {
     quote: "due within thirty days",
     quote_char_start: 23,
     quote_char_end: 45,
+    // The chunk's own position on the page; `page_quote_char_*` is the sum.
+    chunk_char_start: 489,
+    chunk_char_end: 620,
     page_quote_char_start: 512,
     page_quote_char_end: 534,
     supporting_text: "due within thirty days",

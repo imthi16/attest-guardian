@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { CredentialForm } from "./credential-form";
@@ -31,7 +31,12 @@ describe("CredentialForm", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Please correct the highlighted fields.");
     expect(alert).toHaveTextContent("Reference: invalid_input");
-    expect(alert).toHaveFocus();
+    // Focus is applied in an effect, so it lands *after* the banner is in the
+    // DOM. Asserting it the moment `findByRole` resolves races that effect —
+    // usually winning, and losing under the load of a full parallel run, which
+    // is the worst kind of failure: real, rare, and unrelated to the change
+    // that surfaced it.
+    await waitFor(() => expect(alert).toHaveFocus());
 
     const email = screen.getByLabelText("Email address");
     expect(email).toHaveAttribute("aria-invalid", "true");
