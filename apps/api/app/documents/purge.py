@@ -35,11 +35,13 @@ logger = logging.getLogger("app.documents.purge")
 
 async def purge_one(
     *,
-    session: AsyncSession,
     storage: ObjectStorage,
     purge: StoragePurge,
 ) -> bool:
     """Delete one record's objects and mark it complete; False if it must retry.
+
+    Only the record is mutated — the caller owns the transaction that persists
+    the verdict, so a failure leaves the record pending for the next pass.
 
     Recorded keys are deleted even when listing fails, so a storage endpoint
     that refuses `list_objects_v2` still gets the uploaded bytes removed — but
@@ -107,7 +109,7 @@ async def run_pending_purges(
             purge = await StoragePurgeRepository(session).claim_pending()
             if purge is None:
                 return completed
-            if await purge_one(session=session, storage=storage, purge=purge):
+            if await purge_one(storage=storage, purge=purge):
                 completed += 1
     return completed
 
@@ -119,12 +121,17 @@ def collect_purge(
     keys: Sequence[str],
     key_prefix: str,
 ) -> StoragePurge:
-    """Build the record a permanent deletion commits alongside its row deletion."""
+    """Build the record a permanent deletion commits alongside its row deletion.
+
+    `attempts` is set here rather than left to the column default, which only
+    applies at flush: the record is counted against before it is ever reloaded.
+    """
     return StoragePurge(
         workspace_id=workspace_id,
         document_id=document_id,
         key_prefix=key_prefix,
         keys=list(keys),
+        attempts=0,
     )
 
 

@@ -66,8 +66,12 @@ class StoragePurge(WorkspaceOwnedModel):
     # record matters, and the purge must outlive it.
     document_id: Mapped[uuid.UUID] = mapped_column(index=True)
     key_prefix: Mapped[str] = mapped_column(Text)
-    keys: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
-    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    keys: Mapped[list[str]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     last_error: Mapped[str | None] = mapped_column(Text)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

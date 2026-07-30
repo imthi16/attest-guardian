@@ -8,7 +8,7 @@ storage, presigned downloads, authorization, and audit events. They require
 import io
 import uuid
 import zipfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import httpx
@@ -16,7 +16,10 @@ import pytest
 from app.config import Settings
 from app.db.models.documents import Document, DocumentVersion, Page
 from app.db.models.enums import DocumentStatus, IngestionStatus
-from app.db.models.operations import AuditLog, IngestionJob
+from app.db.models.operations import AuditLog, IngestionJob, StoragePurge
+from app.db.repositories.purges import StoragePurgeRepository
+from app.documents.keys import page_image_key
+from app.documents.purge import purge_one
 from app.storage.s3 import S3ObjectStorage
 from botocore.exceptions import ClientError
 from sqlalchemy import func, select
@@ -450,6 +453,11 @@ async def test_retry_only_reprocesses_a_failed_document(
         assert error_code(missing) == "document_not_found"
 
 
+def purge_is_complete(purge: StoragePurge) -> bool:
+    """Read the verdict through a call so a narrowed `None` cannot stick."""
+    return purge.completed_at is not None
+
+
 async def run_pending_purge(
     db_session: AsyncSession,
     object_storage: S3ObjectStorage,
@@ -462,7 +470,7 @@ async def run_pending_purge(
     """
     purge = await StoragePurgeRepository(db_session).claim_pending()
     assert purge is not None, "permanent deletion must leave a purge record"
-    completed = await purge_one(session=db_session, storage=object_storage, purge=purge)
+    completed = await purge_one(storage=object_storage, purge=purge)
     await db_session.flush()
     return completed
 
@@ -584,7 +592,7 @@ async def test_listing_and_detail_for_members(client: httpx.AsyncClient) -> None
     assert detail.json()["sha256"] == uploaded.json()["sha256"]
 
 
-async def test_delete_purges_rendered_page_images(
+async def test_delete_purges_page_images_including_ones_no_row_recorded(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     object_storage: S3ObjectStorage,
@@ -592,9 +600,12 @@ async def test_delete_purges_rendered_page_images(
     """Page images are document content and must not outlive a deletion.
 
     When `ingestion_store_page_images` is on, the worker renders a PNG per page
-    and records its key on the `pages` row. Deleting the document cascades those
-    rows away, so a purge that only collected version keys would leave pictures
-    of the document's pages readable in the bucket forever.
+    and records its key on the `pages` row — but it writes the object *before*
+    that row exists, and persists every row only after the OCR loop. A run that
+    failed mid-OCR therefore leaves images the database never recorded, so this
+    also plants an unrecorded image under the document's prefix: a purge driven
+    by rows alone would leave pictures of the pages readable in the bucket
+    forever.
     """
     owner = await make_account(client, "owner@example.com")
     workspace_id = await make_workspace(client, owner)
@@ -606,14 +617,26 @@ async def test_delete_purges_rendered_page_images(
     )
     assert version is not None
 
-    image_key = f"{version.storage_key}.page-1.png"
-    await object_storage.put_object(image_key, b"\x89PNG\r\n\x1a\n", "image/png")
+    recorded_key = page_image_key(
+        uuid.UUID(workspace_id),
+        uuid.UUID(document_id),
+        version_number=version.version_number,
+        page_number=1,
+    )
+    orphaned_key = page_image_key(
+        uuid.UUID(workspace_id),
+        uuid.UUID(document_id),
+        version_number=version.version_number,
+        page_number=2,
+    )
+    for key in (recorded_key, orphaned_key):
+        await object_storage.put_object(key, b"\x89PNG\r\n\x1a\n", "image/png")
     db_session.add(
         Page(
             document_version_id=version.id,
             page_number=1,
             text="rendered page",
-            image_storage_key=image_key,
+            image_storage_key=recorded_key,
         )
     )
     await db_session.flush()
@@ -621,11 +644,11 @@ async def test_delete_purges_rendered_page_images(
     await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
     deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
     assert deleted.status_code == 204, deleted.text
+    assert await run_pending_purge(db_session, object_storage)
 
-    with pytest.raises(ClientError, match="NoSuchKey"):
-        await object_storage.get_object(image_key)
-    with pytest.raises(ClientError, match="NoSuchKey"):
-        await object_storage.get_object(version.storage_key)
+    for key in (recorded_key, orphaned_key, version.storage_key):
+        with pytest.raises(ClientError, match="NoSuchKey"):
+            await object_storage.get_object(key)
 
     logged = await db_session.scalar(
         select(AuditLog).where(
@@ -634,9 +657,85 @@ async def test_delete_purges_rendered_page_images(
         )
     )
     assert logged is not None
-    # One version, two stored objects: the upload and its rendered page.
+    # One version, and two objects the rows knew about: the upload and the one
+    # page image that reached a `pages` row. The third is only reachable through
+    # the prefix, which is why the purge does not trust this count.
     assert logged.detail["version_count"] == 1
-    assert logged.detail["object_count"] == 2
+    assert logged.detail["recorded_object_count"] == 2
+
+
+async def test_a_failed_purge_keeps_its_record_for_a_later_attempt(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    object_storage: S3ObjectStorage,
+) -> None:
+    """The whole point of the record: a storage failure must not lose the work.
+
+    Deleting rows before objects used to mean a storage failure rolled the
+    request back; the reverse meant a commit failure stranded a document with no
+    bytes. Now neither happens — the deletion is committed, and an unreachable
+    bucket only delays the purge.
+    """
+
+    class BrokenStorage:
+        """Lists like the real bucket, refuses every delete."""
+
+        def __init__(self, inner: S3ObjectStorage) -> None:
+            self._inner = inner
+
+        async def put_object(self, key: str, data: bytes, content_type: str) -> None:
+            await self._inner.put_object(key, data, content_type)
+
+        async def get_object(self, key: str) -> bytes:
+            return await self._inner.get_object(key)
+
+        async def list_keys(self, prefix: str) -> Sequence[str]:
+            return await self._inner.list_keys(prefix)
+
+        async def delete_object(self, key: str) -> None:
+            msg = "storage is unreachable"
+            raise RuntimeError(msg)
+
+        async def presigned_get_url(self, key: str, expires_in_seconds: int) -> str:
+            return await self._inner.presigned_get_url(key, expires_in_seconds)
+
+    owner = await make_account(client, "owner@example.com")
+    workspace_id = await make_workspace(client, owner)
+    document_id = (await upload(client, owner, workspace_id)).json()["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/documents"
+
+    storage_key = await db_session.scalar(
+        select(DocumentVersion.storage_key).where(
+            DocumentVersion.document_id == uuid.UUID(document_id)
+        )
+    )
+    assert storage_key is not None
+
+    await client.post(f"{base}/{document_id}/archive", headers=owner.headers)
+    deleted = await client.delete(f"{base}/{document_id}", headers=owner.headers)
+    assert deleted.status_code == 204, deleted.text
+    # The document is gone regardless of what storage does next.
+    assert await db_session.get(Document, uuid.UUID(document_id)) is None
+
+    purge = await StoragePurgeRepository(db_session).claim_pending()
+    assert purge is not None
+    assert not await purge_one(
+        storage=BrokenStorage(object_storage),
+        purge=purge,
+    )
+    await db_session.flush()
+    assert not purge_is_complete(purge)
+    assert purge.attempts == 1
+    first_error = purge.last_error
+    assert first_error is not None and "unreachable" in first_error
+
+    # A later pass finds the same record and finishes the job.
+    assert await run_pending_purge(db_session, object_storage)
+    assert purge_is_complete(purge)
+    assert purge.attempts == 2
+    assert purge.last_error is None
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        await object_storage.get_object(storage_key)
 
 
 async def test_delete_is_refused_while_a_worker_is_mid_run(
@@ -699,15 +798,39 @@ async def test_permanent_failures_are_not_retryable(
     assert refused.status_code == 409
     assert error_code(refused) == "document_permanently_failed"
 
-    # ...and the status endpoint says so rather than offering a doomed button.
+    # ...and every representation says so rather than offering a doomed button.
+    # The list matters as much as the status endpoint: it is what the library
+    # page renders its controls from, and it has no per-row status request.
     progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
     assert progress.json()["retryable"] is False
+    detail = await client.get(f"{base}/{document_id}", headers=owner.headers)
+    assert detail.json()["retryable"] is False
+    listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in listing.json()] == [False]
 
     # A transient failure that merely exhausted its attempts stays retryable.
     job.permanent_failure = False
     await db_session.flush()
     progress = await client.get(f"{base}/{document_id}/status", headers=owner.headers)
     assert progress.json()["retryable"] is True
+    detail = await client.get(f"{base}/{document_id}", headers=owner.headers)
+    assert detail.json()["retryable"] is True
+    listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in listing.json()] == [True]
+
+    # Only the latest run decides: an older permanent failure must not make a
+    # freshly retried document look doomed.
+    db_session.add(
+        IngestionJob(
+            workspace_id=uuid.UUID(workspace_id),
+            document_id=uuid.UUID(document_id),
+            status=IngestionStatus.FAILED,
+            permanent_failure=True,
+        )
+    )
+    await db_session.flush()
+    listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in listing.json()] == [False]
 
 
 async def test_retryable_reflects_the_callers_own_capability(
@@ -734,6 +857,12 @@ async def test_retryable_reflects_the_callers_own_capability(
     as_viewer = await client.get(f"{base}/{document_id}/status", headers=viewer.headers)
     assert as_viewer.status_code == 200
     assert as_viewer.json()["retryable"] is False
+
+    # The same scoping on the document itself, which is what renders the control.
+    viewer_listing = await client.get(base, headers=viewer.headers)
+    assert [entry["retryable"] for entry in viewer_listing.json()] == [False]
+    owner_listing = await client.get(base, headers=owner.headers)
+    assert [entry["retryable"] for entry in owner_listing.json()] == [True]
 
     # And the flag matches what the endpoint actually does for that caller.
     refused = await client.post(f"{base}/{document_id}/retry", headers=viewer.headers)
