@@ -7,8 +7,9 @@ added later documents something rather than decorating a page.
 This page is the index, not the gallery. Each capture is rendered in the document that makes its
 claim — `05-evidence-panel.png` in the README and `DESIGN_RATIONALE.md`, `08-quarantine.png` in
 `SECURITY.md`, `05` and `07` in `DEMO.md` — because a reader following the main documentation should
-see the evidence, not a filename. `04-answer.png` is rendered only here, for the reason under its
-own heading.
+see the evidence, not a filename. The README uses `04` rather than `05`: they are the same frame,
+and `05` is scrolled up far enough to put a large conversation title above the answer, which is the
+wrong thing to meet first on the repository's front page.
 
 **All four carry a defect.** They were taken against `next dev`, so the Next.js development
 indicator — a red badge reading *1 Issue* — sits in the bottom-left corner of `04` and `05`. It is

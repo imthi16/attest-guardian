@@ -1,20 +1,72 @@
+<div align="center">
+
 # Attest Guardian
 
-A secure multilingual document-intelligence platform for **Tamil, Tanglish, and English**. It
-answers only from evidence, attaches citations that resolve back to the exact characters of a
-stored page, verifies every claim it makes, treats document text as untrusted data, and abstains
-when the evidence will not carry an answer.
+**Document intelligence that proves its answers.**
 
-- **Why it is not chat-with-PDF** → [`docs/DESIGN_RATIONALE.md`](./docs/DESIGN_RATIONALE.md)
-- **What it measurably does** → [Measured behaviour](#measured-behaviour)
-- **Run it in ten minutes** → [Quick start](#quick-start)
-- **What it does not do yet** → [`docs/ROADMAP.md`](./docs/ROADMAP.md)
+Tamil · Tanglish · English
 
-## The problem
+<!-- One source line on purpose: inside a centred HTML block GitHub turns each newline into a <br>, which stacks the badges vertically. -->
+
+[![CI](https://github.com/imthi16/attest-guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/imthi16/attest-guardian/actions/workflows/ci.yml) [![Coverage floor 90%](https://img.shields.io/badge/coverage_floor-90%25-0b5c63)](./apps/api/pyproject.toml) [![Python 3.12+](https://img.shields.io/badge/python-3.12+-0b5c63)](./apps/api/pyproject.toml) [![Node 22](https://img.shields.io/badge/node-22-0b5c63)](./apps/web/package.json) [![PostgreSQL 17 + pgvector](https://img.shields.io/badge/postgres-17_+_pgvector-0b5c63)](./docker-compose.yml)
+
+</div>
+
+---
+
+## Every answer arrives with its coordinates
+
+Ask a question whose evidence holds up and you get back a claim, the document it came from, and the
+exact character range that supports it. Open the citation and the platform re-reads the stored text
+at those offsets:
+
+```text
+claim        An employee resigning from a permanent role must give 60 days written notice.
+source       travel-expense-policy.pdf · version 1 · page 1
+citation     characters 139–215
+evidence     re-read from stored content at those offsets, and required to match exactly
+verdict      SUPPORTED · checked by entailment-verifier-v1
+confidence   Low (42%) · banded, and computed from retrieval, rerank, OCR, and query overlap
+```
+
+That is not a description of the design. It is the capture below, field for field:
+
+![The answer with a caution badge and banded confidence, a SUPPORTED verdict from entailment-verifier-v1, and the open evidence panel showing travel-expense-policy.pdf version 1, page 1, characters 139-215 with the proven passage highlighted.](./docs/screenshots/04-answer.png)
+
+The highlighted text was **read out of storage at those offsets when the panel was opened**. It is
+not the quote the answer produced — a quote that failed to match renders a failure notice here
+instead of a passage. That distinction is the whole product, and
+[`docs/screenshots/`](./docs/screenshots/README.md) records what each capture does and does not
+establish.
+
+The condition in the first sentence is load-bearing. When the evidence will not carry an answer the
+pipeline returns no claims at all — an abstention naming *which* refusal it is, with confidence
+reported as an absence rather than a low score:
+
+![An abstention reading "There is related material, but nothing that answers this exact question", with confidence 0%.](./docs/screenshots/07-abstention.png)
+
+---
+
+## Where to look, by how long you have
+
+This is a large repository. If you are evaluating it rather than running it, these are the shortest
+paths to the parts that carry actual engineering decisions.
+
+| You have | Read | Because it shows |
+| --- | --- | --- |
+| **2 min** | [Measured behaviour](#measured-behaviour) | Every guarantee has a number, a floor, and a failing case left visible |
+| **10 min** | [`docs/DESIGN_RATIONALE.md`](./docs/DESIGN_RATIONALE.md) | Why each guarantee exists, and what keeping it cost elsewhere |
+| **30 min** | [`docs/EVALUATION.md`](./docs/EVALUATION.md) | Digest-pinned datasets, and two defects the framework found |
+| **An hour** | [`AGENTS.md`](./AGENTS.md), [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md) | The rules the code is held to, and what is out of scope |
+| **A terminal** | [Quick start](#quick-start) | Ten minutes to a grounded answer on your own document |
+
+---
+
+## What it refuses to do
 
 A document assistant that is fluent and occasionally wrong is worse than one that is blunt and
 always checkable, because nothing in a fluent wrong answer tells the reader which one they got.
-Attest Guardian is built around that asymmetry:
+Every row below is a place that asymmetry changed a decision.
 
 | Common behaviour | What this system does instead |
 | --- | --- |
@@ -26,10 +78,80 @@ Attest Guardian is built around that asymmetry:
 | Splits Tamil with `\w`-based tokenizers | Uses a mark-aware tokenizer, because a Tamil vowel sign is a combining mark and `\w` drops it |
 | Filters documents in the UI | Enforces the tenant boundary in repositories and in PostgreSQL row-level security |
 
-## How it works
+---
 
-The query path is a typed LangGraph state machine whose gates are the graph's own conditional
-edges, so no code path reaches generation without passing them:
+## Measured behaviour
+
+Measured on every CI run against a versioned synthetic corpus, with floors declared in
+[`evaluation/thresholds.json`](./evaluation/thresholds.json) and a committed baseline asserted equal
+to a fresh run — so the numbers below cannot quietly become fiction.
+
+| Metric | Measured | Floor |
+| --- | --- | --- |
+| Retrieval Recall@3 / MRR | 1.00 / 1.00 | 1.00 / 0.90 |
+| Answer correctness / faithfulness | 1.00 / 1.00 | 0.90 / 1.00 |
+| Citation precision / recall / resolvable | 1.00 / 1.00 / 1.00 | 0.90 / 0.90 / 1.00 |
+| Abstention precision / recall | 1.00 / **0.86** | 0.90 / 0.80 |
+| Injection recall / precision | 1.00 / 1.00 | 1.00 / 1.00 |
+| Tenant-isolation containment | 1.00 | 1.00 |
+
+> [!NOTE]
+> **0.86 is the honest number.** One of seven unanswerable questions is answered from a passage that
+> mentions the topic without addressing it. The case fails; the floor does not — 0.86 clears the
+> declared 0.80, so CI is green and the defect is real anyway. The dataset was left exposing it
+> rather than adjusted until it disappeared, and it is the most valuable number in the report to
+> improve.
+
+[`docs/EVALUATION.md`](./docs/EVALUATION.md) records what each metric excludes, why an unmeasurable
+metric is `null` rather than `1.0`, and the two defects the framework found in the platform itself.
+
+---
+
+## Quick start
+
+Prerequisites: Python 3.12+, Node.js 22, Docker with Compose v2, GNU Make, Git.
+
+```bash
+cp .env.example .env       # local-only credentials; never reuse them anywhere else
+make install               # apps/api/.venv + npm ci for apps/web
+make infra-up              # PostgreSQL(+pgvector), Redis, MinIO, and the local bucket
+make migrate-up            # apply the schema
+```
+
+Then run the three processes, each in its own terminal:
+
+```bash
+make dev-api               # http://127.0.0.1:8000
+make dev-worker            # ingestion
+make dev-web               # http://127.0.0.1:3000
+```
+
+> [!IMPORTANT]
+> `make dev-worker` is the one whose absence is invisible. Without it, uploads are accepted and
+> never processed while the API stays genuinely healthy — documents sit at `queued` forever and no
+> error appears anywhere.
+
+Open `http://127.0.0.1:3000`, register an account, create a workspace, upload a PDF, wait for it to
+reach **ready**, and ask a question. [`docs/DEMO.md`](./docs/DEMO.md) is a guided walkthrough of what
+to look at and why.
+
+Run `make check` before considering any change done: formatting, linting, strict typing, both test
+suites with their coverage floors, the evaluation, the production build, and Compose validation.
+`make help` lists every target.
+
+**No Docker?** `make demo-api` starts an in-memory stand-in implementing the auth and workspace
+contracts, so the UI can be driven without infrastructure — local viewing only, see
+[`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md#viewing-the-ui-without-docker).
+
+---
+
+<details>
+<summary><b>How it works</b> — the query graph, the ingestion pipeline, and the topology</summary>
+
+<br>
+
+The query path is a typed LangGraph state machine whose gates are the graph's own conditional edges,
+so no code path reaches generation without passing them:
 
 ```mermaid
 flowchart LR
@@ -72,25 +194,32 @@ flowchart TB
   API --> OS
 ```
 
-Full detail, and the reasoning behind each decision, is in
+Every subsystem and the reasoning behind it is in
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
-### What a checkable answer looks like
+```text
+apps/api/          FastAPI service: auth, RBAC, documents, ingestion, retrieval, RAG, safety
+apps/web/          Next.js App Router client; a backend-for-frontend, never a token holder
+services/          Boundary READMEs for ingestion, retrieval, verification, safety
+packages/          contracts/openapi.json — the pin between the two programs; config; observability
+infra/             Alembic migrations, row-level security, Grafana dashboard, Prometheus rules
+evaluation/        Datasets, digests, thresholds, and the committed baseline report
+deploy/            Production Compose overlay
+docs/              Everything in the table below
+tests/             Cross-cutting unit, integration, and evaluation suites
+```
 
-![The evidence panel showing travel-expense-policy.pdf, version 1, page 1, characters 139-215, with the proven passage highlighted.](./docs/screenshots/05-evidence-panel.png)
+</details>
 
-`Page 1, characters 139–215` is the citation's range. The highlighted text was **read back from the
-stored document at those offsets** when the panel was opened — it is not the quote the answer
-supplied, and a quote that failed to match would render a failure here instead of a passage. More
-captures, and what each one does and does not establish, are in
-[`docs/screenshots/`](./docs/screenshots/README.md).
+<details>
+<summary><b>What is implemented</b> — every subsystem, and which adapters are stand-ins</summary>
 
-## What is implemented
+<br>
 
-Everything below runs today and is covered by tests; nothing in this table is aspirational. The
-adapters marked *stand-in* are deterministic local implementations behind the real interface —
-swapping in a hosted model changes no calling code. See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for
-what is deliberately not built.
+Everything below runs today and is covered by tests; nothing here is aspirational. The adapters
+marked *stand-in* are deterministic local implementations behind the real interface — swapping in a
+hosted model changes no calling code. [`docs/ROADMAP.md`](./docs/ROADMAP.md) enumerates what is
+deliberately not built.
 
 | Area | State |
 | --- | --- |
@@ -114,72 +243,9 @@ what is deliberately not built.
 | Observability | Redaction-in-the-formatter JSON logs, W3C trace context across the queue, Prometheus metrics, Grafana dashboard |
 | Deployment | Compose production overlay, preflight, smoke checks, backup/restore, rollback runbook |
 
-## Quick start
+</details>
 
-Prerequisites: Python 3.12+, Node.js 22, Docker with Compose v2, GNU Make, Git.
-
-```bash
-cp .env.example .env       # local-only credentials; never reuse them anywhere else
-make install               # apps/api/.venv + npm ci for apps/web
-make infra-up              # PostgreSQL(+pgvector), Redis, MinIO, and the local bucket
-make migrate-up            # apply the schema
-```
-
-Then run the three processes, each in its own terminal:
-
-```bash
-make dev-api               # http://127.0.0.1:8000
-make dev-worker            # ingestion; without it uploads are accepted and never processed
-make dev-web               # http://127.0.0.1:3000
-```
-
-Open `http://127.0.0.1:3000`, register an account, create a workspace, upload a PDF, wait for it to
-reach **ready**, and ask a question. A guided walkthrough — including what to look at and why — is
-in [`docs/DEMO.md`](./docs/DEMO.md).
-
-Run `make check` before considering any change done: it runs formatting, linting, strict typing,
-both test suites with their coverage floors, the evaluation, the production build, and Compose
-validation. `make help` lists every target.
-
-**No Docker?** `make demo-api` starts an in-memory stand-in that implements the auth and workspace
-contracts, so the UI can be driven without infrastructure. It is for local viewing only — see
-[`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md#viewing-the-ui-without-docker).
-
-## Measured behaviour
-
-The claims above are measured on every CI run against a versioned synthetic corpus, with floors
-declared in `evaluation/thresholds.json` and a committed baseline asserted equal to a fresh run.
-
-| Metric | Measured | Floor |
-| --- | --- | --- |
-| Retrieval Recall@3 / MRR | 1.00 / 1.00 | 1.00 / 0.90 |
-| Answer correctness / faithfulness | 1.00 / 1.00 | 0.90 / 1.00 |
-| Citation precision / recall / resolvable | 1.00 / 1.00 / 1.00 | 0.90 / 0.90 / 1.00 |
-| Abstention precision / recall | 1.00 / **0.86** | 0.90 / 0.80 |
-| Injection recall / precision | 1.00 / 1.00 | 1.00 / 1.00 |
-| Tenant-isolation containment | 1.00 | 1.00 |
-
-Abstention recall is bolded because it is the honest number: one of seven unanswerable questions is
-answered from a passage that mentions the topic without addressing it. The **case** fails; the
-floor does not — 0.86 clears the declared 0.80, so CI is green and the defect is real anyway. The
-dataset was left exposing it rather than adjusted until it disappeared, and it is the most valuable
-number in the report to improve. Read
-[`docs/EVALUATION.md`](./docs/EVALUATION.md) for what each metric excludes, why an unmeasurable
-metric is `null` rather than `1.0`, and the two real defects the framework found.
-
-## Repository map
-
-```text
-apps/api/          FastAPI service: auth, RBAC, documents, ingestion, retrieval, RAG, safety
-apps/web/          Next.js App Router client; a backend-for-frontend, never a token holder
-services/          Boundary READMEs for ingestion, retrieval, verification, safety
-packages/          contracts/openapi.json — the pin between the two programs; config; observability
-infra/             Alembic migrations, row-level security, Grafana dashboard, Prometheus rules
-evaluation/        Datasets, digests, thresholds, and the committed baseline report
-deploy/            Production Compose overlay
-docs/              Everything below
-tests/             Cross-cutting unit, integration, and evaluation suites
-```
+---
 
 ## Documentation
 
@@ -200,13 +266,17 @@ tests/             Cross-cutting unit, integration, and evaluation suites
 | [`AGENTS.md`](./AGENTS.md) | The non-negotiable engineering rules, authoritative for the repo |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | How to propose a change that can be reviewed |
 
+---
+
 ## Status
 
 Issues [#1–#26](https://github.com/imthi16/attest-guardian/issues) are complete: the platform runs
 end to end, from registration through ingestion, retrieval, grounded answering, verification,
-abstention, injection defence, evaluation, observability, and a documented deployment. It is a
-portfolio-scale system, not a production service — the model adapters are deterministic stand-ins,
-rate limiting is per process, and the gaps are enumerated rather than implied in
-[`docs/ROADMAP.md`](./docs/ROADMAP.md).
+abstention, injection defence, evaluation, observability, and a documented deployment.
+
+It is a portfolio-scale system, not a production service. The model adapters are deterministic
+stand-ins, rate limiting is per process, and no collector is wired to the metrics. Those gaps are
+enumerated rather than implied — [`docs/ROADMAP.md`](./docs/ROADMAP.md) is the index of everything
+this does not do.
 
 Report a suspected vulnerability privately; see [`SECURITY.md`](./SECURITY.md).
