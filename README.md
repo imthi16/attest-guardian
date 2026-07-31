@@ -16,8 +16,9 @@ Tamil · Tanglish · English
 
 ## Every answer arrives with its coordinates
 
-Ask a question and you get back a claim, the document it came from, and the exact character range
-that supports it. Open the citation and the platform re-reads the stored text at those offsets:
+Ask a question whose evidence holds up and you get back a claim, the document it came from, and the
+exact character range that supports it. Open the citation and the platform re-reads the stored text
+at those offsets:
 
 ```text
 claim        An employee resigning from a permanent role must give 60 days written notice.
@@ -37,6 +38,12 @@ not the quote the answer produced — a quote that failed to match renders a fai
 instead of a passage. That distinction is the whole product, and
 [`docs/screenshots/`](./docs/screenshots/README.md) records what each capture does and does not
 establish.
+
+The condition in the first sentence is load-bearing. When the evidence will not carry an answer the
+pipeline returns no claims at all — an abstention naming *which* refusal it is, with confidence
+reported as an absence rather than a low score:
+
+![An abstention reading "There is related material, but nothing that answers this exact question", with confidence 0%.](./docs/screenshots/07-abstention.png)
 
 ---
 
