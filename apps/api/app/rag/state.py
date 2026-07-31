@@ -52,6 +52,14 @@ class RagState(BaseModel):
 
     # --- query analysis ---
     detected_language: str = "unknown"
+    # The question in every script it was written or rendered into: original,
+    # normalized, and (for Tanglish) transliterated into Tamil. Retrieval has
+    # always searched all of them; generation and verification score against the
+    # one that shares a script with the evidence, because a romanized question
+    # and a Tamil-script passage share no tokens at all, and a claim scored on
+    # the raw form alone would be dropped as unsupported after retrieval had
+    # correctly found the passage that answers it.
+    search_variants: tuple[str, ...] = ()
 
     # --- retrieval ---
     evidence: tuple[EvidencePassage, ...] = ()

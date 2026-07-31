@@ -31,7 +31,7 @@ from app.citations.resolver import CitationResolver
 from app.citations.types import ChunkProvenance, CitationError, CitationReference
 from app.evaluation.datasets import CorpusChunk, EvaluationDatasets, IsolationCase, QueryCase
 from app.evaluation.metrics import CostAccount
-from app.language import match_tokens, normalize_for_match
+from app.language import get_default_query_processor, match_tokens, normalize_for_match
 from app.rag.config import RagConfig
 from app.rag.graph import RagGraph
 from app.rag.state import RagState
@@ -82,11 +82,20 @@ class CorpusRetriever:
     The workspace filter is applied here because there is no database to apply
     it. It stands in for the repository scoping, so what the pipeline downstream
     can be held to is that it never emits anything this method did not return.
+
+    It also runs the **real** `QueryProcessor` and scores every search variant,
+    because `HybridRetrievalService` does exactly that before it touches
+    PostgreSQL, and this class replaces that service. Scoring only the raw query
+    would substitute the query pipeline as well as the data layer — and it did:
+    a Tanglish question could then only ever match romanized text, so the
+    transliterator could emit anything at all, up to and including malformed
+    Tamil, without moving a single metric.
     """
 
     def __init__(self, datasets: EvaluationDatasets, workspace: str) -> None:
         self._chunks = datasets.workspace_corpus(workspace)
         self._workspace = workspace
+        self._processor = get_default_query_processor()
 
     async def retrieve(
         self,
@@ -98,8 +107,18 @@ class CorpusRetriever:
         language: str | None,
     ) -> tuple[Sequence[EvidencePassage], dict[str, object]]:
         del workspace_id, document_id, language  # scoping is the constructor's job here
+        # Best variant wins, mirroring the lexical retriever's OR over variants:
+        # a Tanglish question scores against its Tamil-script transliteration as
+        # well as its original form, so cross-script retrieval is measurable.
+        # `default=0.0` because a blank query yields no variants at all, and a
+        # bare `max()` over nothing raises — which would turn "matches nothing"
+        # into a crash on the one input that must return an empty result.
+        variants = self._processor.process(query).search_variants or (query,)
         scored = [
-            (score, chunk) for chunk in self._chunks if (score := overlap(query, chunk.text)) > 0.0
+            (score, chunk)
+            for chunk in self._chunks
+            if (score := max((overlap(variant, chunk.text) for variant in variants), default=0.0))
+            > 0.0
         ]
         scored.sort(key=lambda item: (-item[0], item[1].chunk_id))
         passages = [

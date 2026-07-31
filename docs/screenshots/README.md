@@ -36,6 +36,9 @@ passage.
 `ask_for_clarification` decision, distinct from "there is nothing here" and from "a human should
 look at this". Confidence is `0%`, which a reader must take as an absence rather than a score.
 
+Cropped to the card from a full-page capture; nothing else is altered. Worth retaking full-frame
+alongside `09-archived.png`, since the two belong side by side.
+
 ### `08-quarantine.png` — quarantine is terminal
 
 ![The document library showing vendor-notice.md as QUARANTINED alongside two READY documents, offering only Download and Archive.](./08-quarantine.png)
@@ -51,7 +54,7 @@ verdict is terminal at every role.
 | `01-roles.png` | 1 | The same workspace as a viewer and as an owner, side by side — no composer, no upload control for the viewer | `DEMO.md`, `ARCHITECTURE.md` |
 | `02-ingestion.png` | 2 | The document detail page mid-run, with a named stage and the attempt count | `DEMO.md` |
 | `03-upload-rejected.png` | 2 | An upload refused with a stable code (`content_mismatch` or `unsupported_file_type`) | `DEMO.md`, `SECURITY.md` |
-| `06-tanglish.png` | 4 | A romanized-Tamil question answered from a Tamil-script document. **Blocked** — see [`ROADMAP.md`](../ROADMAP.md#limitations); the transliterator does not yet produce matchable Tamil. A Tamil-script question does work and is worth capturing in its place | `README.md`, `DEMO.md` |
+| `06-tanglish.png` | 4 | A romanized-Tamil question answered from a Tamil-script document, with the Tamil citation legible. No longer blocked — the transliterator was fixed, and `eettiya viduppu ethanai naal` now answers from the Tamil leave policy | `README.md`, `DEMO.md` |
 | `09-archived.png` | 7 | The same question abstaining after the source document was archived | `DEMO.md` |
 | `10-evaluation.png` | 8 | `make evaluate` output with the thresholds table and the abstention line | `README.md`, `EVALUATION.md` |
 

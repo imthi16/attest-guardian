@@ -7,6 +7,20 @@ import type { NextConfig } from "next";
 const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN ?? "";
 const connectSrc = ["'self'", apiOrigin].filter(Boolean).join(" ");
 
+// React's development build calls `eval()` to rebuild stack frames across the
+// server/client boundary, so a policy without 'unsafe-eval' makes every page
+// log a CSP error before it renders. Production React never calls it.
+//
+// The allowance is therefore scoped to `next dev` rather than added to the
+// shipped policy: relaxing production CSP to quiet a development console would
+// trade a real control for a cosmetic one. `NODE_ENV` is set by Next itself —
+// `next dev` sets "development", `next build` sets "production" — so a built
+// artifact cannot pick this up.
+const isDevelopment = process.env.NODE_ENV === "development";
+const scriptSrc = isDevelopment
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+  : "script-src 'self' 'unsafe-inline'";
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -15,7 +29,7 @@ const contentSecurityPolicy = [
   "img-src 'self' data:",
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' 'unsafe-inline'",
+  scriptSrc,
   `connect-src ${connectSrc}`,
   "form-action 'self'",
 ].join("; ");

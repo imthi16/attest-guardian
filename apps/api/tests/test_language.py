@@ -144,9 +144,40 @@ class TestMixedAndAmbiguous:
 
 
 class TestNormalizationComponents:
-    def test_transliterator_renders_tamil_script(self) -> None:
-        out = RuleBasedTransliterator().transliterate("vanakkam")
-        assert any("\u0b80" <= ch <= "\u0bff" for ch in out)
+    # Expected strings, not a Unicode-range check. "Contains a character in
+    # the Tamil block" is satisfied by consonant-virama-vowel runs that are
+    # well-formed Unicode, are not Tamil, and match no document - which is
+    # how a broken transliterator passed this suite for so long.
+    @pytest.mark.parametrize(
+        ("romanized", "tamil"),
+        [
+            ("viduppu", "\u0bb5\u0bbf\u0b9f\u0bc1\u0baa\u0bcd\u0baa\u0bc1"),
+            ("eettiya", "\u0b88\u0b9f\u0bcd\u0b9f\u0bbf\u0baf"),
+            ("enna", "\u0b8e\u0ba9\u0bcd\u0ba9"),
+            ("irukku", "\u0b87\u0bb0\u0bc1\u0b95\u0bcd\u0b95\u0bc1"),
+            ("eppadi", "\u0b8e\u0baa\u0bcd\u0baa\u0b9f\u0bbf"),
+        ],
+    )
+    def test_transliterator_writes_real_tamil_clusters(self, romanized: str, tamil: str) -> None:
+        assert RuleBasedTransliterator().transliterate(romanized) == tamil
+
+    def test_a_vowel_after_a_consonant_is_a_sign_not_a_letter(self) -> None:
+        """The defect itself, pinned.
+
+        Tamil writes consonant+vowel as one cluster (\u0bb5 + \u0bbf = \u0bb5\u0bbf). Emitting the
+        *independent* vowel instead (\u0bb5\u0bcd + \u0b87) yields text that renders and can
+        never match a document, so the independent forms must not appear here.
+        """
+        out = RuleBasedTransliterator().transliterate("vidupu")
+        assert out == "\u0bb5\u0bbf\u0b9f\u0bc1\u0baa\u0bc1"
+        assert not any(vowel in out for vowel in ("\u0b85", "\u0b87", "\u0b89", "\u0b8e", "\u0b92"))
+
+    def test_a_vowel_opening_a_syllable_keeps_its_independent_form(self) -> None:
+        """The other half: word-initial vowels have no consonant to attach to."""
+        assert RuleBasedTransliterator().transliterate("ethanai") == "\u0b8e\u0ba4\u0ba9\u0bc8"
+
+    def test_a_trailing_consonant_takes_the_virama(self) -> None:
+        assert RuleBasedTransliterator().transliterate("naal").endswith("\u0bcd")
 
     def test_transliterator_passes_through_non_latin(self) -> None:
         assert RuleBasedTransliterator().transliterate(TAMIL_HELLO) == TAMIL_HELLO

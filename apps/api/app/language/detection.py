@@ -58,6 +58,38 @@ _TANGLISH_MARKERS = frozenset(
         "theriyuma",
         "theriyum",
         "namba",
+        # Content words, not conversational ones. Without these the lexicon
+        # recognised only chatty Tanglish, and a question made of domain
+        # vocabulary ("eettiya viduppu maathamum") scored zero markers and was
+        # classified English — so it was never transliterated and could not
+        # reach a Tamil-script document at all.
+        #
+        # That mattered more than it looks, because the two heuristics pulled
+        # against each other: reaching the 40% marker ratio meant padding a
+        # question with words like "enna" and "irukku", and those words appear
+        # in no formal document, so they diluted the verifier's query-overlap
+        # confidence below its floor and the answer was dropped as weakly
+        # connected. A question was either not detected or not answerable.
+        #
+        # Every entry is a romanization with no English homograph, because the
+        # ratio is computed over all words and one accidental hit in a short
+        # English query would flip it.
+        "aandu",
+        "eettiya",
+        "ethanai",
+        "kolgai",
+        "maatham",
+        "maathamum",
+        "maruthuva",
+        "naal",
+        "naatkal",
+        "oozhiyar",
+        "ovvoru",
+        "sambalam",
+        "uuzhiyar",
+        "vidupu",
+        "viduppu",
+        "vivaram",
     }
 )
 

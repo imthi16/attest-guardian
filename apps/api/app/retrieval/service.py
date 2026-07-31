@@ -26,6 +26,7 @@ from app.db.models.documents import Chunk, Document, DocumentVersion, evidence_e
 from app.db.repositories.chunks import ChunkRepository, LexicalMatch
 from app.db.repositories.embeddings import ChunkEmbeddingRepository, VectorMatch
 from app.embeddings.service import EmbeddingService
+from app.language import ProcessedQuery, match_tokens
 from app.language.processor import QueryProcessor, get_default_query_processor
 from app.reranking.service import RerankService
 from app.reranking.types import RerankItem
@@ -48,6 +49,26 @@ class RetrievalConfig:
     top_k: int = 10
     rerank_enabled: bool = True
     rerank_candidate_limit: int = 30
+
+
+def _best_variant(processed: ProcessedQuery, chunks: Sequence[RetrievedChunk]) -> str:
+    """The query variant sharing the most tokens with the retrieved candidates.
+
+    Ties fall back to the original, so an English or Tamil query — whose
+    variants are all the same string — reranks on exactly what the user typed.
+    """
+    if len(processed.search_variants) <= 1 or not chunks:
+        return processed.original
+    candidate_tokens: set[str] = set()
+    for chunk in chunks:
+        candidate_tokens |= match_tokens(chunk.content)
+    best = processed.original
+    best_score = len(match_tokens(processed.original) & candidate_tokens)
+    for variant in processed.search_variants:
+        score = len(match_tokens(variant) & candidate_tokens)
+        if score > best_score:
+            best, best_score = variant, score
+    return best
 
 
 class HybridRetrievalService:
@@ -120,7 +141,15 @@ class HybridRetrievalService:
 
         hydrated = await self._hydrate(workspace_id, fused)
         if reranking:
-            hydrated = self._rerank(processed.original, hydrated, trace)
+            # Rerank against the variant that shares a script with the candidates,
+            # not the original. Lexical retrieval searches every variant, so a
+            # Tanglish question legitimately returns Tamil-script passages — and
+            # the romanized form shares no tokens with them, so reranking on it
+            # scores every one of those passages at zero. That score is not only
+            # an ordering: it is carried through as `rerank_raw_score` and
+            # weighted into the verifier's calibrated confidence, so scoring the
+            # wrong script drops claims the evidence actually supports.
+            hydrated = self._rerank(_best_variant(processed, hydrated), hydrated, trace)
         hydrated = hydrated[:resolved_top_k]
         trace.returned_count = len(hydrated)
         return RetrievalResult(chunks=hydrated, trace=trace)
