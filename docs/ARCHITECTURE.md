@@ -1,5 +1,9 @@
 # Architecture
 
+How each subsystem works and why it was built that way. Two neighbours: the *decisions* that shape
+the product, condensed, are in [`DESIGN_RATIONALE.md`](./DESIGN_RATIONALE.md), and the HTTP surface
+those subsystems expose is in [`API.md`](./API.md).
+
 ```text
 Browser / Next.js
        |
@@ -375,10 +379,14 @@ The pipeline is a straight line with three hard gates that cannot be bypassed
 because they are the graph's own conditional edges:
 
 ```text
-authorize ─▶ analyze ─▶ retrieve ─▶ generate ─▶ verify ─▶ compose ─▶ answer
-    │                       │                        │
-    └── abstain ◀───────────┴── abstain ◀────────────┴── abstain
+authorize ─▶ analyze ─▶ retrieve ─▶ generate ─▶ verify ─▶ decide ─▶ compose ─▶ answer
+    │                       │                               │
+    └── abstain ◀───────────┴── abstain ◀──────────────────-┴── abstain
 ```
+
+The three gates are the conditional edges out of `authorize`, `retrieve`, and `decide`;
+`verify` always runs and always hands its verdicts to `decide`, which is where the
+calibrated policy chooses whether anything is surfaced.
 
 1. **authorize** — the request must carry a proven workspace scope (membership,
    role, and row-level security are already bound by the route dependency);
@@ -399,9 +407,14 @@ authorize ─▶ analyze ─▶ retrieve ─▶ generate ─▶ verify ─▶ co
    confirms the quote actually occurs in that chunk, and assigns a *calibrated*
    confidence blending retrieval, rerank, OCR, and query-overlap signals rather
    than any model's self-reported score. Only `SUPPORTED` claims survive, so a
-   hallucinated or paraphrased quote cannot be cited. The **support gate**
-   abstains when nothing survives.
-5. **compose** — the answer is assembled from supported claims only, with a
+   hallucinated or paraphrased quote cannot be cited.
+5. **decide** — the calibrated decision policy reads what survived verification
+   and chooses the outcome. This is the **support gate**: when nothing is
+   supported, or the calibrated confidence does not carry an answer, it routes to
+   abstention and names *which* abstention it is, so a reader is told "there is
+   nothing here", "ask me differently", or "a human should look at this" rather
+   than a bare refusal.
+6. **compose** — the answer is assembled from supported claims only, with a
    citation per claim carrying exact provenance (document, version, page,
    section, in-chunk offsets, language). The outcome is `PARTIAL` when some
    candidates were dropped, `ANSWERED` otherwise.

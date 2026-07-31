@@ -10,11 +10,13 @@ prompt-injection attempts, and abstains when evidence is insufficient. The full 
 non-negotiable engineering rules live in [`AGENTS.md`](./AGENTS.md) — read it before making changes;
 it is treated as authoritative for the whole repository.
 
-**Current state**: this is an early-stage monorepo skeleton. Only health-check endpoints and CI/local
-infra plumbing exist so far (see `git log`). Product features (auth, ingestion, retrieval, generation,
-verification, safety) are tracked as separate issues in [`docs/BACKLOG.md`](./docs/BACKLOG.md) and
-staged in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md) — check those before assuming
-a subsystem is implemented rather than planned.
+**Current state**: all twenty-six planned units of work are delivered — auth, tenancy, ingestion,
+parsing/OCR, chunking, language, retrieval, reranking, RAG, citations, verification, abstention,
+injection defence, both UIs, evaluation, observability, and deployment. The Architecture section
+below is the current map. What is *not* built is enumerated in
+[`docs/ROADMAP.md`](./docs/ROADMAP.md) — read it before assuming a gap is an oversight, and note
+that the embedding, reranking, generation, and malware-scanning providers are deterministic local
+stand-ins behind real interfaces, not the models named in `AGENTS.md`.
 
 ## Commands
 

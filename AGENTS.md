@@ -14,7 +14,11 @@ Build a secure multilingual document-intelligence platform for Tamil, Tanglish, 
 6. Keep the MVP read-only. Do not add external side effects without explicit approval and threat modelling.
 7. Never commit secrets, credentials, private documents, PII, or generated model artifacts.
 
-## Planned stack
+## Stack
+
+Every item is in place. The OCR, embedding, reranking, and generation entries name the *intended*
+providers: each sits behind an interface that the MVP satisfies with a deterministic local
+stand-in, so swapping one changes no calling code. `docs/ROADMAP.md` says which is which.
 
 - Frontend: Next.js and TypeScript
 - Backend: FastAPI and Python 3.12+
@@ -119,7 +123,11 @@ A task is complete only when:
 - AI changes include a measurable regression test;
 - completion is verified with evidence rather than assumption.
 
-## Initial milestones
+## Milestones
+
+All seven are complete; they are kept as the record of the order the work had to be done in, which
+is why (for example) provenance-preserving chunking precedes retrieval. Current status and the
+remaining gaps are in `docs/ROADMAP.md`.
 
 1. Monorepo foundation, local infrastructure, CI, and application skeletons.
 2. Authentication, workspaces, RBAC, migrations, and audit events.

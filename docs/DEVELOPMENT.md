@@ -80,8 +80,8 @@ normalizing → chunking → embedding → indexing → ready`, committing each 
 `GET .../documents/{id}/status` shows live progress. Validating re-downloads the object,
 re-checks its SHA-256 and content magic; scanning uses the `MalwareScanner` interface (the
 default engine only recognizes the EICAR test signature — a placeholder, not protection) and
-quarantines on a hit without retrying. Parsing through indexing are placeholders until issues
-#7–#10 land. Transient failures retry up to `INGESTION_MAX_ATTEMPTS`, then dead-letter;
+quarantines on a hit without retrying. Parsing through indexing all do real work; the sections
+below describe each. Transient failures retry up to `INGESTION_MAX_ATTEMPTS`, then dead-letter;
 `requeue_stale` recovers jobs whose worker crashed (stale `running`) or whose enqueue was lost
 (stale `queued`). Workers bind row-level security per job from the queue message; the
 cross-workspace recovery scan means a deployed worker role needs `BYPASSRLS`.
