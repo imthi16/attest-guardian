@@ -163,15 +163,27 @@ provenance lives. The stored `verifier` is the one the trace says actually ran,
 not a constant, since a verdict attributed to the wrong verifier is not audit
 evidence.
 
-A turn is atomic. The question is written before the pipeline runs and the answer
-only from a terminal result, so a completed run stores both and a failed or
-abandoned one stores neither — the request's transaction rolls back together.
-That means a failed question does not linger in the thread; the alternative,
-committing the question separately so it survives, was considered and rejected,
-because a half-turn is harder to reason about than no turn and the separate
-transaction would escape the request's rollback in tests too. An abstention is
-*not* a failure: it is a real answer about the state of the evidence and is
-recorded like any other outcome.
+A turn is atomic **on the JSON route**. The question is written before the pipeline
+runs and the answer only from a terminal result, so a completed run stores both and
+a failed one stores neither — the exception propagates out of the route and the
+request's transaction rolls back together. That means a failed question does not
+linger in the thread; the alternative, committing the question separately so it
+survives, was considered and rejected, because a half-turn is harder to reason about
+than no turn and the separate transaction would escape the request's rollback in
+tests too.
+
+**Streaming cannot have that property, and does not pretend to.** By the time a node
+fails the response is already `200`, so the failure becomes an `error` event rather
+than an exception — the generator finishes normally and the transaction commits the
+question alone. Raising instead would replace a reportable error with a truncated
+connection the client could not distinguish from a network drop, which is the worse
+trade: a stored question with no answer is legible, and it is the same state a
+client already has to handle when a proxy cuts the stream. Both are why the web app
+treats a stream that ends without an `answer` event as *uncertain* and re-reads the
+thread rather than reporting failure.
+
+An abstention is *not* a failure in either case: it is a real answer about the state
+of the evidence and is recorded like any other outcome.
 
 Turn order is a recorded fact, not an inference. `messages.sequence` (migration
 `0014`) is assigned while holding the conversation's row lock, because a question

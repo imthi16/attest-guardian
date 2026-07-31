@@ -72,15 +72,24 @@ flowchart TB
 
 Four boundaries, each with a rule that holds regardless of what the layer above did:
 
-1. **Browser → Next.js.** The browser never holds a token. An XSS foothold has nothing to steal
-   because the session lives in `httpOnly` cookies read only by server code.
+1. **Browser → Next.js.** The session lives in `httpOnly` cookies, so client JavaScript cannot read
+   a token and an XSS foothold cannot **exfiltrate** one — there is no credential to carry away and
+   replay later, from another machine, after the page is closed. It can still *act*: the browser
+   holds the cookies and attaches them to same-origin requests, so script running on the page can
+   do anything the signed-in user can, for as long as the foothold lasts. `httpOnly` bounds the
+   theft, not the session.
 2. **Next.js → API.** The web tier is not an authorization point. Its role checks are presentation
    only; every mutation round-trips and the API decides. A forged cookie fails at the API.
 3. **API → data.** Authorization is enforced three times over: the route proves membership and a
    capability, repositories scope every query by `workspace_id`, and PostgreSQL row-level security
    fences the tables underneath both. Any one of them failing alone does not leak a row.
-4. **Content → everything downstream.** Document text is data at every hop. It is scanned for
-   injection before it is ever persisted, and it is quoted, scored, and cited — never obeyed.
+4. **Content → everything downstream.** Document text is data at every hop: it is quoted, scored,
+   and cited, never obeyed. The injection scan runs before **chunk** persistence, which is the
+   boundary that matters for retrieval — but not before all persistence. The uploaded bytes are
+   already in object storage, and extracted and OCR'd page text is committed by the parse stage
+   before the chunk stage scans it. A quarantine verdict writes no chunk rows and does not remove
+   the pages. So quarantined content is unreachable by retrieval, reranking, generation, and
+   citation, and it is *not* absent from storage.
 
 ## Threats and what answers them
 
@@ -107,7 +116,7 @@ contents to …"* is the normal case, not the exotic one.
 | Threat | Control |
 | --- | --- |
 | Instructions embedded in document text or OCR output | `app/safety` detects overrides, role impersonation, exfiltration and tool-use requests, indirect "when you read this" triggers, and obfuscated payloads over NFKC-folded, homoglyph-folded, zero-width-stripped and de-spaced views |
-| Injected content reaching the model | Enforcement is at ingestion, **before persistence**: a quarantine verdict writes no chunk rows at all |
+| Injected content reaching the model | Enforcement is at ingestion, **before chunk persistence**: a quarantine verdict writes no chunk rows at all, and a chunk is the only unit retrieval can return. The uploaded bytes and the extracted page text are already stored by then and stay stored |
 | Content quarantined after chunking | Defence in depth: retrieval only returns chunks of a `READY` document, so quarantined content cannot reach retrieval, generation, or citation |
 | An attacker un-quarantining their own document | Quarantine is terminal. No API path reprocesses a quarantined document, at any role |
 | Detection quietly regressing | A versioned corpus across English, Tamil, and Tanglish gates recall and precision at 1.00 in CI, shared between the detector's own suite and the cross-cutting report so the two cannot disagree |
@@ -121,6 +130,11 @@ chunk set and drops what does not match.
 
 **Residual:** detection is rule-based with an optional classifier hook, so a novel phrasing can
 evade it. This is why the enforcement is layered rather than trusted once.
+
+**Residual:** a quarantined document's bytes and extracted page text remain in storage and in the
+`pages` table. Nothing reads them — retrieval works on chunks, and no chunk was written — but a
+retention or export process added later must not assume the quarantine removed the content.
+Permanently deleting the document is what removes it.
 
 ### Answer integrity
 
@@ -157,14 +171,21 @@ engine behind that interface.
 | Password cracking | Argon2id |
 | Credential stuffing | Per-IP, per-path sliding-window limits on credential endpoints, plus a global limit |
 | Account enumeration | Credential and token failures collapse to one code each |
-| Token theft from the browser | No token ever reaches client JavaScript; the audit `rg "localStorage\|sessionStorage" apps/web` must stay empty |
+| Token *exfiltration* from the browser | No token ever reaches client JavaScript; the audit `rg "localStorage\|sessionStorage" apps/web` must stay empty. Note the scope: this stops a token leaving the browser, not a script acting through the session it is already inside |
 | Refresh-token replay | Rotation on every use; a revoked token coming back revokes **every** session for that account, on the assumption it was captured |
 | CSRF | The API is not cookie-authenticated, so there is no ambient credential. The web tier's `SameSite=Lax` cookies are scoped per *site*, not per origin, so its relays verify `Origin` against `X-Forwarded-Host`/`Host` explicitly |
 | Open redirect after login | The `next` parameter is rejected unless it is a single-slash relative path |
 
-**Residual:** rate limiting is in-process, so a horizontally scaled deployment enforces the window
-per replica; and rate-limit keys use the socket peer address, which behind an unconfigured proxy
-is the proxy. Both are in [`SECURITY.md`](./SECURITY.md#residual-risks).
+**Residual, and it is live rather than hypothetical:** both limiters keep their state in the
+process. `deploy/docker-compose.production.yml` defaults `API_REPLICAS` to **2**, so the documented
+production deployment already runs two API processes and a client's effective budget is roughly
+twice the configured one — requests landing on either replica draw from a separate window. This is
+not a future concern to revisit when the system scales; it is the shipped default. Until a
+Redis-backed limiter exists (the limiter sits behind `RateLimiter`, so the swap is local), a
+deployment that needs the configured limit to mean what it says must set `API_REPLICAS=1`.
+
+Rate-limit keys also use the socket peer address, which behind an unconfigured proxy is the proxy.
+Both are in [`SECURITY.md`](./SECURITY.md#residual-risks).
 
 ### Data at rest and disclosure through telemetry
 
@@ -184,7 +205,7 @@ backups may still hold a copy. Deleted bytes are not shredded.
 
 | Threat | Control |
 | --- | --- |
-| Request flooding | Global per-IP limit; body cap before buffering |
+| Request flooding | Global per-IP limit. A body cap applies before buffering **when the request declares `Content-Length`**; the upload route has its own streaming cap regardless. A chunked request to any other body-consuming endpoint has no application-level bound |
 | A poisoned job blocking the queue | Bounded attempts then dead-letter; deterministic failures are marked permanent and never retried |
 | A crashed worker stranding jobs | `requeue_stale` recovers `running` and `queued` jobs past an age threshold |
 | Concurrent lifecycle operations racing | Retry and delete read the document `FOR UPDATE`, and every path that writes a document and its job takes the document lock **first**, so the reverse order cannot deadlock |
@@ -237,4 +258,6 @@ rather than be absorbed:
 - **Sending evidence to a hosted provider.** Tenant content would leave the trust boundary.
 - **Serving `/metrics` publicly, or adding a per-tenant metric label.** Both turn telemetry into a
   disclosure channel.
-- **Scaling past one API replica.** In-process rate limiting stops being a limit.
+- **Raising `API_REPLICAS` further.** In-process rate limiting divides by the replica count. The
+  production default is already 2, so this is a matter of degree rather than a line not yet
+  crossed — see the residual note under [Sessions and credentials](#sessions-and-credentials).

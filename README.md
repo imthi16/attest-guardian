@@ -22,7 +22,7 @@ Attest Guardian is built around that asymmetry:
 | Cites a document and page | Cites a chunk, version, page, section, and character offsets, and re-reads the stored text to prove the quote |
 | Shows the quote the model produced | Shows `content[start:end]` read back from the document; a mismatch renders a failure, never the passage |
 | Reports the model's own confidence | Calibrates confidence from retrieval, rerank, OCR, and overlap signals; a model's self-report is never a score |
-| Treats retrieved text as context | Treats retrieved text as untrusted data, scanned for injection before it is ever persisted |
+| Treats retrieved text as context | Treats retrieved text as untrusted data, scanned for injection before a chunk is persisted |
 | Splits Tamil with `\w`-based tokenizers | Uses a mark-aware tokenizer, because a Tamil vowel sign is a combining mark and `\w` drops it |
 | Filters documents in the UI | Enforces the tenant boundary in repositories and in PostgreSQL row-level security |
 
@@ -97,7 +97,7 @@ what is deliberately not built.
 | Answers | LangGraph pipeline with three hard gates, extractive generator *(stand-in)*, per-claim citations |
 | Verification | Per-claim quote resolution against the authorized chunk set, calibrated confidence, unsupported claims dropped |
 | Abstention | Explicit decisions with reasons — no evidence, needs narrowing, contradictory, needs review |
-| Safety | Prompt-injection detection over normalized text, quarantine before persistence, retrieval excludes quarantined content |
+| Safety | Prompt-injection detection over normalized text, quarantine before chunk persistence, retrieval excludes quarantined content |
 | Conversations | Durable threads, ordered turns, SSE streaming, per-claim citations and verdicts, reviewer feedback |
 | Web app | Next.js App Router; tokens never leave server code; explicit loading/empty/refusal/error states; evidence panel |
 | Evaluation | Versioned corpus, digest-pinned datasets, thresholds in one file, committed baseline asserted against a fresh run |
@@ -150,8 +150,10 @@ declared in `evaluation/thresholds.json` and a committed baseline asserted equal
 | Tenant-isolation containment | 1.00 | 1.00 |
 
 Abstention recall is bolded because it is the honest number: one of seven unanswerable questions is
-answered from a passage that mentions the topic without addressing the question. It is left failing
-rather than tuned away, and it is the most valuable number in the report to improve. Read
+answered from a passage that mentions the topic without addressing it. The **case** fails; the
+floor does not — 0.86 clears the declared 0.80, so CI is green and the defect is real anyway. The
+dataset was left exposing it rather than adjusted until it disappeared, and it is the most valuable
+number in the report to improve. Read
 [`docs/EVALUATION.md`](./docs/EVALUATION.md) for what each metric excludes, why an unmeasurable
 metric is `null` rather than `1.0`, and the two real defects the framework found.
 

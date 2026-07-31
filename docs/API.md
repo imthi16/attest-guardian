@@ -175,8 +175,11 @@ safe to log.
 | --- | --- | --- |
 | `POST` | `/api/v1/workspaces/{workspace_id}/answer` | `query` |
 
-The one-shot grounded answer. It persists nothing, which is why a viewer may call it. `top_k` is
-clamped to `RAG_MAX_TOP_K`.
+The one-shot grounded answer. It writes no conversation, message, or citation — which is why a
+viewer holding only the read-only `query` capability may call it — but it is **not** a read-only
+request: every run appends a `rag.answer` audit row carrying the workspace, the actor, and the
+non-sensitive trace, and that row commits with the request. Treat the endpoint as "persists no
+answer content", not as "touches nothing". `top_k` is clamped to `RAG_MAX_TOP_K`.
 
 The response is an outcome, not prose. `outcome` is `answered`, `partial` (some candidate claims
 were dropped), or `abstained`; `abstained` is also a boolean of its own. Treat `answered` and
@@ -240,9 +243,20 @@ unordered relationship, so on a multi-claim answer positional pairing eventually
 passage under another. That is worse than a missing citation: the evidence looks proven and
 supports a different statement.
 
-A turn is atomic: the question and its answer share the request transaction, so a failed run stores
-neither. Turn order comes from `messages.sequence`, not from `created_at` — the two rows of a turn
-are written in one transaction and PostgreSQL's `now()` is transaction-start time, so they tie.
+**On `.../messages`, a turn is atomic**: the question and its answer share the request transaction,
+and a pipeline failure propagates out of the route, so the transaction rolls back and stores
+neither.
+
+**On `.../messages/stream` it is not**, and a client must not assume otherwise. The question is
+persisted before streaming begins, and a pipeline failure is caught and reported as an `error`
+event rather than raised — the response is already `200`, so there is nothing left to fail with.
+The generator then finishes normally and the transaction commits, leaving the question stored with
+no answer beside it. That is the same question-only outcome as a stream cut short, described under
+[Streaming](#streaming), and it is deliberate: what was asked survives even when answering it did
+not.
+
+Turn order comes from `messages.sequence`, not from `created_at` — the two rows of a turn are
+written in one transaction and PostgreSQL's `now()` is transaction-start time, so they tie.
 
 Feedback is unique per (message, reviewer), so `PUT` revises rather than accumulates: the row is
 that reviewer's current opinion, not a log of their clicks. It is accepted only on assistant turns

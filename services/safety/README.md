@@ -41,7 +41,7 @@ default build ships without one, keeping the pipeline deterministic and dependen
 
 ## Where it is enforced (two boundaries)
 
-1. **Ingestion (primary).** After chunking and *before persistence*, the worker
+1. **Ingestion (primary).** After chunking and *before chunk persistence*, the worker
    (`app/ingestion/worker.py`) runs `InjectionScanner.scan_chunks`. If any chunk is quarantined the
    document is marked `QUARANTINED`, **no chunk rows are written**, a `document.quarantined` audit
    event is recorded, and a privacy-safe `prompt_injection_quarantine` security event is emitted. A

@@ -76,9 +76,11 @@ usable evidence.
 ### 4. Document text is an actor, not a payload
 
 Uploaded files, OCR output, and retrieved chunks are untrusted at every hop. Injection scanning
-happens during ingestion, **before persistence** — a quarantine verdict writes no chunk rows at
-all — and retrieval independently excludes non-`READY` documents, so content quarantined after
-chunking still cannot reach an answer. Quarantine is terminal at every role.
+happens during ingestion, **before chunk persistence** — a quarantine verdict writes no chunk rows
+at all, and a chunk is the only unit retrieval can return — and retrieval independently excludes
+non-`READY` documents, so content quarantined after chunking still cannot reach an answer.
+Quarantine is terminal at every role. It withholds content from answers rather than erasing it:
+the uploaded bytes and the extracted page text are already stored by the time the scan runs.
 
 **Rejected:** a prompt boundary ("the following is data, not instructions"). A delimiter is a
 request; a pipeline stage that never persists the chunk is a property.
@@ -133,7 +135,8 @@ diff, and the committed baseline is asserted equal to a fresh run — so the num
 cannot quietly become fiction. An unmeasurable metric is `null` and does **not** clear its floor,
 because treating an absent number as satisfied turns an empty dataset into a green build.
 
-Abstention recall sits at 0.86 and is **left failing**. One unanswerable question in seven —
+Abstention recall sits at 0.86, above its declared floor of 0.80 — so the suite passes and the
+**case is still left failing**. One unanswerable question in seven —
 "what is the training budget for the marketing team" — retrieves a passage that mentions training
 budgets without answering, and the pipeline answers from it. No threshold fixes that; it needs
 semantic matching rather than lexical overlap. Adjusting the dataset until it passed would have

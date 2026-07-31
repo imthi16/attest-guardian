@@ -80,7 +80,7 @@ Each of these is described where it is owned; this is the index.
 
 | Limitation | Owner |
 | --- | --- |
-| Rate limiting is in-process, so a scaled deployment enforces the window per replica | [`SECURITY.md`](./SECURITY.md#residual-risks) |
+| Rate limiting is in-process, and `API_REPLICAS` defaults to **2**, so the shipped production deployment already divides every limit in two | [`THREAT_MODEL.md`](./THREAT_MODEL.md#sessions-and-credentials) |
 | Rate-limit keys use the socket peer address; behind an unconfigured proxy that is the proxy | [`SECURITY.md`](./SECURITY.md#residual-risks) |
 | The request body cap relies on `Content-Length`; a chunked request is bounded only by the streaming upload cap | [`SECURITY.md`](./SECURITY.md#residual-risks) |
 | The web CSP permits `'unsafe-inline'` pending a nonce-based policy (the API CSP does not) | [`SECURITY.md`](./SECURITY.md#residual-risks) |
@@ -111,6 +111,11 @@ Each of these is described where it is owned; this is the index.
   id and history. Plan a version change as a re-ingestion of the workspace.
   [`CONFIGURATION.md`](./CONFIGURATION.md#re-embedding-after-a-version-change)
 - **No retention or scheduled deletion workflow.** Deletion is per document and manual.
+- **Quarantine withholds content; it does not erase it.** The scan runs before *chunk* persistence,
+  so quarantined text is unreachable by retrieval — but the uploaded bytes and the extracted page
+  text are already stored by then and stay stored. Permanent deletion is what removes them, and any
+  export or retention feature added later must not assume otherwise.
+  [`THREAT_MODEL.md`](./THREAT_MODEL.md#prompt-injection--direct-and-indirect)
 - **No document versioning through the UI.** The schema carries `document_versions`; re-uploading
   changed content is a new document.
 
@@ -130,7 +135,9 @@ Ordered by what a reader of this repository would most want fixed, not by effort
 
 ### 1. Abstention recall
 
-The single most valuable number in the evaluation and the only floor currently failing. The known
+The single most valuable number in the evaluation. Note what is and is not failing: 0.86 clears the
+declared floor of 0.80, so `make evaluate` exits green — it is the *case* that fails, not the
+threshold, and no build is knowingly red. That is exactly why it is written down here. The known
 case retrieves a topical passage and answers from it, so the fix is semantic matching between the
 question and the candidate evidence rather than lexical overlap — which means it lands naturally
 alongside a real embedding model, not before one.
@@ -153,8 +160,12 @@ current state — correct alerts, no data — is the kind of thing discovered du
 
 ### 5. Redis-backed rate limiting
 
-Required before a second API replica. The limiter is already behind an interface, so the change is
-local; the reason it is not done is that nothing here scales out yet.
+**Already required, not "before scaling".** `deploy/docker-compose.production.yml` defaults
+`API_REPLICAS` to 2, so a deployment that follows the runbook verbatim enforces roughly twice every
+configured limit — the credential limiter included. The limiter sits behind `RateLimiter`, so the
+change is local. Until it lands, a deployment that needs its limits to mean what they say must set
+`API_REPLICAS=1` and accept the throughput; that trade belongs to whoever operates it, which is why
+the default was documented rather than quietly changed.
 
 ### 6. A real malware scanner
 
