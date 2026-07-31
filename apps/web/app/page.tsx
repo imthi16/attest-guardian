@@ -47,10 +47,18 @@ const tamil = Noto_Serif_Tamil({
  * construction. The offsets are not written down anywhere: they are computed
  * from the string rendered on the page, so the number under the caliper is true
  * of the text above it or the page does not build.
+ *
+ * The span has to prove the *whole* claim on its own, since the page says it
+ * does and nothing else. So it carries the action as well as the number: a
+ * highlight reading only "ninety days written notice" leaves what the notice
+ * ends unsaid, and this page's one job is to be the example that survives being
+ * checked. The claim is worded down to what the highlight entails — "either
+ * party" sits outside the span, so the claim does not say it, and every
+ * substantive word of the claim is inside the span, which a test enforces.
  */
 const PASSAGE = "Either party may terminate this agreement with ninety days written notice.";
-const EVIDENCE = "ninety days written notice";
-const CLAIM = "Ninety days written notice is required to end this agreement.";
+const EVIDENCE = "terminate this agreement with ninety days written notice";
+const CLAIM = "This agreement terminates on ninety days written notice.";
 
 const spanStart = PASSAGE.indexOf(EVIDENCE);
 const spanEnd = spanStart + EVIDENCE.length;
@@ -138,14 +146,19 @@ export default function HomePage() {
 
         <p className="lp-exhibit-note">
           {/*
-            The space before "of" is explicit. Adjacent to an expression container
-            the JSX transform drops a plain one, and the sentence renders as
-            "characters 47–73of that page".
+            Both spaces touching the expression containers are explicit. Adjacent
+            to one the JSX transform drops a plain space, and the sentence renders
+            as "characters 17–73of that page" and "nothing else.Opening".
+
+            "Characters", never bytes. A citation resolves as `content[start:end]`
+            over the stored text, and Python slices strings by code point — on a
+            Tamil passage a byte range of the same numbers would cut somewhere
+            else entirely, which is the failure this page claims not to have.
           */}
           The claim above is supported by characters {spanStart}–{spanEnd}
-          {" of that page, and nothing else. Opening the citation reads those bytes back out of "}
-          storage — what you see is the document&apos;s text, not the model&apos;s recollection of
-          it.
+          {" of that page, and nothing else. "}
+          Opening the citation re-reads the stored text at those character offsets — what you see is
+          the document&apos;s text, not the model&apos;s recollection of it.
         </p>
       </section>
 

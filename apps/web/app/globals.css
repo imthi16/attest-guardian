@@ -1323,7 +1323,13 @@ main.lp {
 */
 .lp-proof {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  /*
+    The exhibit's column is sized by its contents, not by taste: the quoted span
+    is one unbroken line of fifty-six monospace characters, and at 1.5fr it
+    reached the frame's right edge at every width. The note beside it is four
+    short lines and gives the room up cheaply.
+  */
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
   grid-template-areas:
     "label label"
     "claim claim"
@@ -1382,7 +1388,8 @@ main.lp {
   margin: 0;
   padding: 2.25rem 1.5rem 3.75rem;
   font-family: var(--lp-font-mono), monospace;
-  font-size: clamp(0.9rem, 1.6vw, 1.08rem);
+  /* Capped so the span clears its frame at the widest layout — see .lp-proof. */
+  font-size: clamp(0.9rem, 1.6vw, 0.98rem);
   line-height: 2.1;
 }
 
@@ -1390,7 +1397,9 @@ main.lp {
   The measurement is drawn by the span itself, so the bracket is exactly as wide
   as the text it measures — no script, and nothing to keep in sync. The span is
   kept on one line for the same reason: a wrapped `mark` would leave the bracket
-  under its last fragment only.
+  under its last fragment only. Below the width where fifty-six monospace
+  characters stop fitting, the caliper is dropped rather than the sentence —
+  see the fallback under `.lp-span-measure`.
 */
 .lp-span {
   position: relative;
@@ -1429,6 +1438,33 @@ main.lp {
   text-align: center;
   white-space: nowrap;
   animation: lp-appear 400ms ease-out 1280ms both;
+}
+
+/*
+  The span has to quote the whole clause — action and number both — or it does
+  not prove the claim printed above it, and on a narrow screen fifty-six
+  monospace characters no longer fit on one line. `nowrap` there would push the
+  exhibit past the viewport, so the highlight wraps instead and the caliper goes
+  away: the bracket is only truthful while it spans one line. Nothing is lost,
+  because the note underneath states the same offsets in words. 44rem is where
+  the span (56 × 0.6em at the clamp's floor) stops clearing the gutters with
+  room to spare.
+*/
+@media (max-width: 44rem) {
+  .lp-span {
+    white-space: normal;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  .lp-span::after,
+  .lp-span-measure {
+    display: none;
+  }
+
+  .lp-passage {
+    padding-bottom: 1.75rem;
+  }
 }
 
 @keyframes lp-sweep {
@@ -1771,8 +1807,10 @@ main.lp {
 }
 
 @media (max-width: 640px) {
+  /* No trailing room for a caliper here: this width is inside the 44rem
+     fallback, where the span wraps and the bracket is not drawn. */
   .lp-passage {
-    padding: 1.75rem 1.15rem 3.5rem;
+    padding: 1.75rem 1.15rem;
     line-height: 2.3;
   }
 

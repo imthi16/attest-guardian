@@ -60,6 +60,38 @@ describe("HomePage", () => {
     expect(end - start).toBe(quoted.length);
   });
 
+  /**
+   * The page says this span supports the claim above it "and nothing else", so
+   * a span that quotes the number without the clause it belongs to would make
+   * the page an example of the failure it is arguing against — the review that
+   * caught it read a highlight of "ninety days written notice" that never said
+   * what the notice ended.
+   *
+   * Entailment is not decidable here, so this asserts the mechanical floor it
+   * rests on: every substantive word of the claim is inside the highlight.
+   * Words shorter than four characters are the sentence's joints ("of", "on",
+   * "this"), and the four-character prefix absorbs the inflection between
+   * "terminates" and "terminate".
+   */
+  it("highlights a span carrying every substantive word of the claim", () => {
+    const { container } = render(<HomePage />);
+
+    const measure = container.querySelector(".lp-span-measure")?.textContent ?? "";
+    const claim = container.querySelector(".lp-claim")?.textContent ?? "";
+    const quoted = (container.querySelector(".lp-span")?.textContent ?? "").replace(measure, "");
+
+    const stem = (word: string) => word.toLowerCase().slice(0, 4);
+    const spanStems = new Set((quoted.match(/[\p{L}\p{M}\p{N}]+/gu) ?? []).map(stem));
+    const claimWords = (claim.match(/[\p{L}\p{M}\p{N}]+/gu) ?? []).filter(
+      (word) => word.length >= 4,
+    );
+
+    expect(claimWords.length).toBeGreaterThan(3);
+    for (const word of claimWords) {
+      expect(spanStems.has(stem(word))).toBe(true);
+    }
+  });
+
   it("keeps the page's first heading its h1", () => {
     render(<HomePage />);
 
