@@ -1,5 +1,10 @@
 # Implementation Plan
 
+The plan the build followed, kept as the record of its staging. Phases 1–6 are delivered; Phase 0's
+threat model landed late, as [`THREAT_MODEL.md`](./THREAT_MODEL.md), rather than first. What the
+finished system does not do is in [`ROADMAP.md`](./ROADMAP.md), which supersedes this page for
+anything forward-looking.
+
 ## Phase 0 — Product baseline
 
 - Finalize user personas, supported document types, refusal policy, and measurable MVP targets.

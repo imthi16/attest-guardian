@@ -19,3 +19,8 @@ flowchart LR
 
 The canonical scope and acceptance criteria are maintained in
 [GitHub issues #1–#26](https://github.com/imthi16/attest-guardian/issues).
+
+**All twenty-six are delivered.** This page is kept as the record of how the work was decomposed and
+in what order — the dependency edges are why, for example, retrieval could not be built before
+provenance-preserving chunking. For what each one produced, and for the limitations the finished
+system carries, see [`ROADMAP.md`](./ROADMAP.md).

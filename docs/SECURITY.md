@@ -7,6 +7,11 @@ boundaries described in [`ARCHITECTURE.md`](./ARCHITECTURE.md) and the non-negot
 [`AGENTS.md`](../AGENTS.md). Controls here are defense in depth; they do not replace those
 boundaries.
 
+This document describes *what is implemented*. For the assets, actors, and trust boundaries that
+decide which controls are worth having — and for what is explicitly out of scope — see
+[`THREAT_MODEL.md`](./THREAT_MODEL.md). Where the two disagree, this one describes the code and
+wins.
+
 ## Response headers
 
 `app.security.middleware.SecurityHeadersMiddleware` attaches the following to every API response,
@@ -75,12 +80,18 @@ obfuscated or encoded payloads), scores them, and turns the result into an `allo
 folding, zero-width stripping, and a de-spaced view) with structural heuristics and an optional
 replaceable classifier; a model's self-report is never trusted.
 
-Enforcement has two boundaries. During ingestion the worker scans every chunk **before
+Enforcement has two boundaries. During ingestion the worker scans every chunk **before chunk
 persistence**: a quarantine verdict marks the document `QUARANTINED`, writes no chunk rows, records
 a `document.quarantined` audit event, and emits a privacy-safe `prompt_injection_quarantine`
 security event (counts, categories, and score only — never chunk text). As defence in depth, both
 retrievers only return chunks of a `READY` document, so quarantined content can never reach
 retrieval, reranking, generation, or citation even if it was quarantined after chunking.
+
+Note the exact scope: the chunk is the only unit retrieval returns, so withholding it is what makes
+the content unreachable — but the uploaded bytes are already in object storage and the parse stage
+has already committed the extracted and OCR'd page text by the time the scan runs. Quarantine
+withholds content from answers; it does not erase it. Permanent deletion is what removes it, and a
+retention or export feature added later must not assume otherwise.
 
 A versioned attack/benign corpus (`tests/injection_corpus.py`) drives recall/precision regression
 tests across English, Tamil, and Tanglish. Thresholds are conservative and must not be weakened to
@@ -247,9 +258,10 @@ which is covered by a regression test.
 - **No CSRF token on server actions.** Protection currently rests on `SameSite=Lax` cookies plus
   Next.js action-id opacity. A double-submit or origin-check token should be added before the app is
   exposed to untrusted browser extensions or embedded contexts.
-- **Refresh-token rotation without reuse detection.** A rotated refresh token is replaced but a
-  replayed old token is only rejected by the API's own revocation; stolen-token reuse is not yet
-  alarmed on.
+- **Refresh-token reuse is detected but not alerted on.** A revoked token presented again revokes
+  every session for that account, which is the right containment, and it is the strongest available
+  signal that a token was captured — yet it raises no alert and appears nowhere an operator would
+  look. Wiring it to `log_security_event` and an alert rule is the missing half.
 - **Superuser bypass of row-level security.** RLS policies only bite for non-superuser database
   roles; deployments must connect the app as a non-superuser role.
 - **Buffered upload relay.** The web upload route reads the whole multipart body into memory
