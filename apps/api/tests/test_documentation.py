@@ -95,7 +95,11 @@ def anchors(text: str) -> set[str]:
         title = _INLINE_CODE.sub(r"\1", heading.group(2))
         title = _INLINE_LINK_TEXT.sub(r"\1", title).lower()
         title = re.sub(r"[^\w\s-]", "", title, flags=re.UNICODE)
-        found.add(re.sub(r"\s+", "-", title.strip()))
+        # One hyphen per space, not one per run. GitHub strips punctuation and
+        # then substitutes each remaining space, so "injection — direct" leaves
+        # two spaces and slugs to `injection--direct`. Collapsing runs here
+        # would compute an anchor GitHub never emits and reject a working link.
+        found.add(re.sub(r"\s", "-", title.strip()))
     return found
 
 
@@ -180,27 +184,44 @@ def test_documented_make_targets_exist() -> None:
 # `test_contracts.py`, so checking the reference against it checks it against
 # the application without importing one.
 API_REFERENCE = (ROOT / "docs" / "API.md").read_text(encoding="utf-8")
-CONTRACT_PATHS = frozenset(
-    json.loads((ROOT / "packages" / "contracts" / "openapi.json").read_text(encoding="utf-8"))[
-        "paths"
-    ]
+_CONTRACT = json.loads(
+    (ROOT / "packages" / "contracts" / "openapi.json").read_text(encoding="utf-8")
 )
-# Paths as they appear in the reference: inside backticks, in the route tables.
-_REFERENCED = frozenset(
-    match.group(1) for match in re.finditer(r"`(/api/v1/[^`]*)`", API_REFERENCE)
+_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
+# Operations, not paths. A route whose method changes without its path changing
+# is invisible to a path-only comparison, and the reference would go on
+# advertising a method the API no longer serves — which is exactly the drift
+# this pair of tests exists to catch.
+CONTRACT_OPERATIONS = frozenset(
+    (method.upper(), path)
+    for path, operations in _CONTRACT["paths"].items()
+    for method in operations
+    if method in _METHODS
+)
+
+# `/metrics` is registered conditionally on `METRICS_ENABLED`, so it is absent
+# from a contract generated with it off. Excluding the one endpoint is narrower
+# than excluding it from the reference, which would leave a
+# deployment-relevant route undocumented.
+_CONDITIONAL = frozenset({"/metrics"})
+
+# A route-table row: method and path, each in its own backticked cell.
+_ROUTE_ROW = re.compile(
+    r"^\|\s*`(GET|POST|PUT|PATCH|DELETE)`\s*\|\s*`([^`]+)`",
+    re.MULTILINE,
+)
+DOCUMENTED_OPERATIONS = frozenset(
+    (match.group(1), match.group(2))
+    for match in _ROUTE_ROW.finditer(API_REFERENCE)
+    if match.group(2) not in _CONDITIONAL
 )
 
 
 def test_every_documented_endpoint_exists() -> None:
-    """The reference never lists a route the API does not serve.
-
-    Only versioned paths are compared. `/metrics` is registered conditionally
-    on `METRICS_ENABLED` and so is absent from a contract generated with it
-    off — excluding it here is narrower than excluding it from the docs, which
-    would leave a deployment-relevant endpoint undocumented.
-    """
-    invented = sorted(_REFERENCED - CONTRACT_PATHS)
-    assert not invented, f"docs/API.md documents paths the API does not serve: {invented}"
+    """The reference never lists a method/path the API does not serve."""
+    assert DOCUMENTED_OPERATIONS, "no route tables found — the check has stopped reading the docs"
+    invented = sorted(DOCUMENTED_OPERATIONS - CONTRACT_OPERATIONS)
+    assert not invented, f"docs/API.md documents operations the API does not serve: {invented}"
 
 
 def test_every_endpoint_is_documented() -> None:
@@ -210,9 +231,11 @@ def test_every_endpoint_is_documented() -> None:
     which is how an API reference becomes a partial one nobody trusts.
     """
     undocumented = sorted(
-        path for path in CONTRACT_PATHS if path.startswith("/api/v1/") and path not in _REFERENCED
+        operation
+        for operation in CONTRACT_OPERATIONS
+        if operation[1].startswith("/api/v1/") and operation not in DOCUMENTED_OPERATIONS
     )
-    assert not undocumented, f"endpoints missing from docs/API.md: {undocumented}"
+    assert not undocumented, f"operations missing from docs/API.md: {undocumented}"
 
 
 def test_documented_error_codes_are_raised_by_the_application() -> None:
