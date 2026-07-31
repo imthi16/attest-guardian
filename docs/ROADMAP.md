@@ -66,6 +66,29 @@ leave the deployment.
 
 ### Answer quality
 
+- **Tanglish queries do not reach Tamil-script documents.** Found by running the stack, not by any
+  test. Two compounding faults, either of which alone breaks the feature:
+
+  1. `RuleBasedTransliterator` maps every Latin vowel to an **independent** Tamil letter (`i`→இ,
+     `u`→உ) and every consonant to a consonant **plus virama** (`v`→வ்), and never combines them.
+     Tamil writes a consonant-vowel cluster with a dependent vowel *sign* — வ + ி = வி — so
+     "vidupu" transliterates to `வ்இட்உப்உ` where Tamil would write `விடுபு`. The output is
+     well-formed Unicode and malformed Tamil, and matches no real document.
+  2. Detection needs ≥40% of a Latin query's words to appear in a 31-word conversational marker
+     lexicon (`enna`, `eppadi`, `irukku`, …). Domain-vocabulary Tanglish — the realistic case — is
+     classified `english`, so no transliteration is attempted at all.
+
+  **Why nothing caught it.** Every transliterator assertion checks only that the output contains at
+  least one character in the Tamil Unicode block, which garbage satisfies. And no Tanglish query in
+  `evaluation/datasets/queries.json` is graded against a `tam` chunk — every one is graded against
+  `tanglish` and `eng` passages — so the single cross-script case the transliterator exists for is
+  absent from the corpus, and the metric stays at 1.00 while the feature does not work.
+
+  This is the same shape as the tokenizer defect in [`EVALUATION.md`](./EVALUATION.md#findings): a
+  Tamil-correctness bug behind an assertion too weak to see it. **Tamil-script queries work
+  correctly** and are unaffected. Fixing it needs a vowel-sign mapping, an assertion on expected
+  output rather than a Unicode-range check, and a cross-script case in the corpus.
+
 - **Abstention recall is 0.86.** One of seven unanswerable questions is answered from a passage that
   mentions the topic without addressing it. Left failing deliberately; no threshold fixes it, and
   it needs semantic rather than lexical matching. [`EVALUATION.md`](./EVALUATION.md#known-limitations)

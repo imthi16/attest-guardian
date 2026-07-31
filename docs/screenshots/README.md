@@ -1,30 +1,59 @@
 # Screenshots
 
-**None are committed yet.** This file is the placeholder: it names each capture, what must be
-visible in it, and where it belongs, so a screenshot added later documents something rather than
-decorating a page.
+Four of the ten are captured, from a real local stack — the API, the ingestion worker, PostgreSQL,
+Redis, and MinIO, with synthetic documents. The rest are named below with what they must show, so a
+screenshot added later documents something rather than decorating a page.
 
-Add the file here under the exact name below, then reference it from the linked document. Until a
-file exists, do not add its image link — a broken image is worse than an absent one, and
+Add a file under the exact name below, then reference it from the linked document. Until a file
+exists, do not add its image link — a broken image is worse than an absent one, and
 `apps/api/tests/test_documentation.py` fails the build both on a link to a file that is not there
 and on an image committed here that no document renders.
 
-## Captures
+## Captured
 
-Numbered to match the scenes in [`../DEMO.md`](../DEMO.md).
+### `04-answer.png` — a grounded answer
+
+![A grounded answer with a caution badge, banded confidence, a per-claim SUPPORTED verdict, the verifier that checked it, and the resolved citation.](./04-answer.png)
+
+The claim carries `SUPPORTED` and the verifier that produced it (`entailment-verifier-v1`), not a
+bare assertion. Confidence is banded — *Low (42%)* — because a bare percentage invites false
+precision, and the caution badge is keyed on the decision rather than the status.
+
+### `05-evidence-panel.png` — the citation resolved against stored content
+
+![The evidence panel showing travel-expense-policy.pdf, Version 1, page 1, characters 139-215, with the proven passage highlighted.](./05-evidence-panel.png)
+
+The most important capture in the set. `Page 1, characters 139–215` is the citation's range, and the
+highlighted text was read back from the stored chunk at those offsets by `/citations/resolve` —
+not supplied by the answer. A quote that did not match would render a failure here instead of a
+passage.
+
+### `07-abstention.png` — a refusal that says which kind it is
+
+![An abstention reading "There is related material, but nothing that answers this exact question", with confidence 0%.](./07-abstention.png)
+
+*"There is related material, but nothing that answers this exact question"* — the
+`ask_for_clarification` decision, distinct from "there is nothing here" and from "a human should
+look at this". Confidence is `0%`, which a reader must take as an absence rather than a score.
+
+### `08-quarantine.png` — quarantine is terminal
+
+![The document library showing vendor-notice.md as QUARANTINED alongside two READY documents, offering only Download and Archive.](./08-quarantine.png)
+
+`vendor-notice.md` carried an injected instruction and was quarantined during ingestion, before any
+chunk was persisted. Note what the row does **not** offer: there is no retry control, because the
+verdict is terminal at every role.
+
+## Still to capture
 
 | File | Scene | Must show | Belongs in |
 | --- | --- | --- | --- |
 | `01-roles.png` | 1 | The same workspace as a viewer and as an owner, side by side — no composer, no upload control for the viewer | `DEMO.md`, `ARCHITECTURE.md` |
 | `02-ingestion.png` | 2 | The document detail page mid-run, with a named stage and the attempt count | `DEMO.md` |
 | `03-upload-rejected.png` | 2 | An upload refused with a stable code (`content_mismatch` or `unsupported_file_type`) | `DEMO.md`, `SECURITY.md` |
-| `04-answer.png` | 3 | A grounded answer with per-claim verdicts and a banded confidence | `README.md`, `DEMO.md` |
-| `05-evidence-panel.png` | 3 | **The most important capture.** The resolved passage highlighted, with document, page, section, and OCR provenance visible | `README.md`, `DEMO.md`, `DESIGN_RATIONALE.md` |
-| `06-tanglish.png` | 4 | A romanized-Tamil question answered from a Tamil-script document, with the Tamil citation legible | `README.md`, `DEMO.md` |
-| `07-abstention.png` | 5 | A refusal showing *which* decision it was, not just "abstained" | `README.md`, `DEMO.md` |
-| `08-quarantine.png` | 6 | A document at `quarantined`, with the reason and no retry control offered | `DEMO.md`, `SECURITY.md` |
+| `06-tanglish.png` | 4 | A romanized-Tamil question answered from a Tamil-script document. **Blocked** — see [`ROADMAP.md`](../ROADMAP.md#limitations); the transliterator does not yet produce matchable Tamil. A Tamil-script question does work and is worth capturing in its place | `README.md`, `DEMO.md` |
 | `09-archived.png` | 7 | The same question abstaining after the source document was archived | `DEMO.md` |
-| `10-evaluation.png` | 8 | `make evaluate` output with the thresholds table and the failing abstention line | `README.md`, `EVALUATION.md` |
+| `10-evaluation.png` | 8 | `make evaluate` output with the thresholds table and the abstention line | `README.md`, `EVALUATION.md` |
 
 ## Rules for a capture
 
