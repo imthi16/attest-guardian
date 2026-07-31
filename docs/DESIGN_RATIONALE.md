@@ -60,6 +60,11 @@ the machine that produced it.
 from rewriting text — chunk content must equal `page_text[char_start:char_end]` byte for byte —
 which means normalization has to happen at read time instead, and every consumer has to know that.
 
+![The evidence panel showing document, version, page and the character range, with the proven passage highlighted.](./screenshots/05-evidence-panel.png)
+
+The character range is the whole argument: it is what makes the citation checkable by the machine
+that produced it rather than by the reader.
+
 ### 3. Confidence is calibrated from signals, never self-reported
 
 Confidence blends retrieval score, rerank score, OCR confidence, and query overlap. A model's own

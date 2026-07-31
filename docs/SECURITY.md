@@ -87,6 +87,12 @@ security event (counts, categories, and score only — never chunk text). As def
 retrievers only return chunks of a `READY` document, so quarantined content can never reach
 retrieval, reranking, generation, or citation even if it was quarantined after chunking.
 
+![The document library showing vendor-notice.md as QUARANTINED beside two READY documents, offering only Download and Archive.](./screenshots/08-quarantine.png)
+
+A document carrying an injected instruction, quarantined during ingestion. The row offers no retry
+control, because the verdict is terminal at every role; the worker's reason is on the document
+detail page, so this frame shows the consequence rather than the cause.
+
 Note the exact scope: the chunk is the only unit retrieval returns, so withholding it is what makes
 the content unreachable — but the uploaded bytes are already in object storage and the parse stage
 has already committed the extracted and OCR'd page text by the time the scan runs. Quarantine

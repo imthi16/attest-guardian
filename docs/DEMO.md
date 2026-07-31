@@ -109,9 +109,21 @@ Now open the evidence panel on a claim. This is the centre of the demo.
 > document, you would be looking at a failure notice instead of a passage. Every other system in
 > this category shows you the model's version of the quote.
 
-Point at the provenance: document, version, page, section, language, OCR engine and confidence.
+Point at the provenance line: document, version, page, and the character range within the page.
 
-**Capture:** `04-answer.png`, `05-evidence-panel.png`.
+Two fields are **conditional, and their absence is the point**. A section appears only when the
+chunker assigned one. OCR reliability appears only when the passage came from OCR — born-digital
+text was read exactly, so there is nothing to warn about, and printing "OCR: none" would invite a
+reader to weigh a distinction that does not exist. Upload the scanned file from the aside below to
+see that line appear. The panel does not display the chunk's language; the citation carries it, and
+the answer text is tagged with it for screen readers.
+
+![The answer, with a caution badge, banded confidence, a SUPPORTED verdict, the verifier that produced it, and the evidence panel open beneath showing travel-expense-policy.pdf, version 1, page 1, characters 139-215 with the proven passage highlighted.](./screenshots/05-evidence-panel.png)
+
+**Captured:** [`05-evidence-panel.png`](./screenshots/README.md). Only one image appears here for two
+beats of the script, because `04-answer.png` is the *same frame* at a different scroll offset — both
+were captured with the panel already open, so the pair does not show the before and after that the
+two beats describe. Re-capturing `04` with the panel collapsed is listed as outstanding.
 
 ### Optional aside — scanned pages (2 min)
 
@@ -183,7 +195,9 @@ If you want the honest version, ask a question whose topic *is* mentioned but no
 well answer. That is the known 0.86 abstention recall, and it is in the documentation rather than
 tuned out of the dataset.
 
-**Capture:** `07-abstention.png`.
+![An abstention reading "There is related material, but nothing that answers this exact question", with confidence 0%.](./screenshots/07-abstention.png)
+
+**Captured:** [`07-abstention.png`](./screenshots/README.md).
 
 ---
 
@@ -204,7 +218,11 @@ It reaches `quarantined` and never becomes evidence.
 > chunk set. The ceiling is influencing which authorized passage gets quoted. Detection is defence
 > in depth on top of a blast radius that was made small first.
 
-**Capture:** `08-quarantine.png`.
+![The library showing vendor-notice.md as QUARANTINED beside two READY documents, offering only Download and Archive.](./screenshots/08-quarantine.png)
+
+**Captured:** [`08-quarantine.png`](./screenshots/README.md) — the state and the missing retry
+control. The worker's *reason* is on the detail page and is still to capture, so this frame shows
+that the verdict happened and not that injection detection is what produced it.
 
 ---
 
