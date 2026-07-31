@@ -55,7 +55,6 @@ main {
 }
 
 .eyebrow,
-.section-kicker,
 .state-label {
   margin: 0 0 1rem;
   color: var(--accent-dark);
@@ -104,22 +103,6 @@ h2 {
   font-size: 1rem;
 }
 
-.capabilities,
-.state-section {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.25fr);
-  gap: 4rem;
-  padding: 5rem 0;
-  border-top: 1px solid var(--line);
-}
-
-.capability-grid,
-.state-grid {
-  display: grid;
-  gap: 1rem;
-}
-
-.capability-card,
 .system-state {
   padding: 1.5rem;
   border: 1px solid var(--line);
@@ -127,13 +110,11 @@ h2 {
   background: color-mix(in srgb, var(--panel) 88%, transparent);
 }
 
-.capability-card h3,
 .system-state h3 {
   margin: 0 0 0.6rem;
   font-size: 1.15rem;
 }
 
-.capability-card p,
 .system-state > p:last-child {
   margin: 0;
   color: var(--muted);
@@ -159,13 +140,6 @@ h2 {
 
   .hero {
     padding: 4rem 0;
-  }
-
-  .capabilities,
-  .state-section {
-    grid-template-columns: 1fr;
-    gap: 2rem;
-    padding: 3.5rem 0;
   }
 }
 
@@ -1217,5 +1191,618 @@ h2 {
 
   .feedback-buttons button {
     width: 100%;
+  }
+}
+
+/* -------------------------------------------------------------- landing page
+
+   Scoped entirely to `main.lp`. The product shares `.hero`, `.eyebrow`,
+   `.tamil-sample`, `.primary-button` and `.system-state` with this file, so the
+   landing page introduces its own namespace rather than restyling any of them.
+
+   Colour carries meaning here and is not decoration: teal is the measured,
+   verified state, and the sienna appears only where the platform refuses.
+*/
+
+body:has(main.lp) {
+  background: #dde3e1;
+}
+
+main.lp {
+  --lp-film: #dde3e1;
+  --lp-leaf: #fafbf8;
+  --lp-ink: #101a19;
+  --lp-muted: #4c5a58;
+  --lp-rule: #c2cbc8;
+  --lp-measure: #0b5c63;
+  --lp-proven: #b7dcd6;
+  --lp-halt: #9c4310;
+
+  --lp-gutter: clamp(1.25rem, 5vw, 5rem);
+  --lp-measure-width: min(68rem, 100%);
+
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0 var(--lp-gutter) 0;
+  background: var(--lp-film);
+  color: var(--lp-ink);
+  font-family: var(--lp-font-body), system-ui, sans-serif;
+}
+
+.lp a:focus-visible,
+.lp button:focus-visible {
+  outline: 3px solid var(--lp-measure);
+  outline-offset: 3px;
+}
+
+.lp > * {
+  width: var(--lp-measure-width);
+  margin-inline: auto;
+}
+
+/* ------------------------------------------------------------------ masthead */
+
+.lp-masthead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.75rem 0;
+  border-bottom: 1px solid var(--lp-rule);
+}
+
+.lp-wordmark {
+  margin: 0;
+  font-family: var(--lp-font-display), system-ui, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.lp-masthead-nav {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.lp-masthead-nav a {
+  color: var(--lp-ink);
+  font-size: 0.92rem;
+  text-decoration: none;
+}
+
+.lp-masthead-nav a:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+
+/* --------------------------------------------------------- shared type atoms */
+
+.lp-label {
+  margin: 0 0 1.25rem;
+  color: var(--lp-measure);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lp h1,
+.lp h2 {
+  margin: 0;
+  max-width: 20ch;
+  font-family: var(--lp-font-display), system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+
+.lp h1 {
+  font-size: clamp(2.6rem, 6.5vw, 4.8rem);
+}
+
+.lp h2 {
+  font-size: clamp(1.7rem, 3.4vw, 2.6rem);
+  max-width: 24ch;
+}
+
+.lp-section-head {
+  margin-bottom: 3rem;
+}
+
+/* ------------------------------------------------ the exhibit and the caliper */
+
+/*
+  The exhibit and the sentence explaining it sit side by side, the way a note
+  sits in a document's margin. Stacked, the proof — the reason anyone is on this
+  page — left the right half of the fold empty and read as unfinished.
+*/
+.lp-proof {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-areas:
+    "label label"
+    "claim claim"
+    "exhibit note";
+  column-gap: clamp(2rem, 4vw, 4rem);
+  align-items: start;
+  padding: clamp(2.5rem, 5vw, 4.5rem) 0 clamp(3rem, 6vw, 5rem);
+}
+
+.lp-proof > .lp-label {
+  grid-area: label;
+}
+
+.lp-claim {
+  grid-area: claim;
+}
+
+.lp-exhibit {
+  grid-area: exhibit;
+}
+
+.lp-exhibit-note {
+  grid-area: note;
+}
+
+.lp-claim {
+  max-width: 22ch;
+  margin: 0 0 2.75rem;
+  font-family: var(--lp-font-display), system-ui, sans-serif;
+  font-size: clamp(1.6rem, 3.4vw, 2.6rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+.lp-exhibit {
+  margin: 0;
+  border: 1px solid var(--lp-rule);
+  background: var(--lp-leaf);
+}
+
+.lp-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.85rem 1.5rem;
+  border-bottom: 1px solid var(--lp-rule);
+  color: var(--lp-muted);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+}
+
+.lp-passage {
+  margin: 0;
+  padding: 2.25rem 1.5rem 3.75rem;
+  font-family: var(--lp-font-mono), monospace;
+  font-size: clamp(0.9rem, 1.6vw, 1.08rem);
+  line-height: 2.1;
+}
+
+/*
+  The measurement is drawn by the span itself, so the bracket is exactly as wide
+  as the text it measures — no script, and nothing to keep in sync. The span is
+  kept on one line for the same reason: a wrapped `mark` would leave the bracket
+  under its last fragment only.
+*/
+.lp-span {
+  position: relative;
+  padding: 0.15em 0.06em;
+  background-color: transparent;
+  background-image: linear-gradient(var(--lp-proven), var(--lp-proven));
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  color: inherit;
+  white-space: nowrap;
+  animation: lp-sweep 620ms cubic-bezier(0.2, 0.7, 0.3, 1) 260ms both;
+}
+
+.lp-span::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 0.4rem);
+  height: 0.42rem;
+  border: 1px solid var(--lp-measure);
+  border-top: 0;
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: lp-draw 520ms cubic-bezier(0.2, 0.7, 0.3, 1) 840ms both;
+}
+
+.lp-span-measure {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 1.15rem);
+  color: var(--lp-measure);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-align: center;
+  white-space: nowrap;
+  animation: lp-appear 400ms ease-out 1280ms both;
+}
+
+@keyframes lp-sweep {
+  from {
+    background-size: 0 100%;
+  }
+}
+
+@keyframes lp-draw {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes lp-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-0.3rem);
+  }
+}
+
+.lp-exhibit-note {
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--lp-measure);
+  color: var(--lp-muted);
+  font-size: 0.94rem;
+  line-height: 1.7;
+}
+
+/* -------------------------------------------------------------------- thesis */
+
+.lp-thesis {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  column-gap: clamp(2rem, 5vw, 5rem);
+  align-items: start;
+  padding: clamp(3rem, 6vw, 5rem) 0 clamp(4rem, 8vw, 6.5rem);
+  border-top: 1px solid var(--lp-rule);
+}
+
+.lp-thesis > h1 {
+  grid-row: 1 / span 2;
+  max-width: none;
+}
+
+.lp-lede {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0;
+  color: var(--lp-muted);
+  font-size: clamp(1.02rem, 1.5vw, 1.15rem);
+  line-height: 1.7;
+}
+
+.lp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  margin: 2.25rem 0 0;
+}
+
+.lp-thesis > .lp-actions {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.lp-cta,
+.lp-cta-ghost {
+  display: inline-block;
+  padding: 0.85rem 1.6rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.lp-cta {
+  background: var(--lp-measure);
+  color: var(--lp-leaf);
+}
+
+.lp-cta:hover {
+  background: var(--lp-ink);
+}
+
+.lp-cta-ghost {
+  border: 1px solid var(--lp-measure);
+  color: var(--lp-measure);
+}
+
+.lp-cta-ghost:hover {
+  background: var(--lp-proven);
+}
+
+/* ------------------------------------------------------------------ outcomes */
+
+.lp-outcomes,
+.lp-tamil,
+.lp-constraints {
+  padding: clamp(3.5rem, 7vw, 5.5rem) 0;
+  border-top: 1px solid var(--lp-rule);
+}
+
+.lp-outcome-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1px;
+  background: var(--lp-rule);
+  border: 1px solid var(--lp-rule);
+}
+
+.lp-outcome {
+  padding: 2rem;
+  background: var(--lp-leaf);
+}
+
+.lp-outcome-verdict {
+  margin: 0 0 1rem;
+  font-family: var(--lp-font-display), system-ui, sans-serif;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.lp-outcome[data-outcome="answered"] .lp-outcome-verdict {
+  color: var(--lp-measure);
+}
+
+.lp-outcome[data-outcome="refused"] .lp-outcome-verdict {
+  color: var(--lp-halt);
+}
+
+.lp-outcome-copy {
+  margin: 0 0 1.75rem;
+  color: var(--lp-muted);
+  line-height: 1.65;
+}
+
+.lp-outcome-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0;
+  color: var(--lp-muted);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.74rem;
+}
+
+.lp-chip {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid currentcolor;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lp-outcome[data-outcome="answered"] .lp-chip {
+  color: var(--lp-measure);
+}
+
+.lp-outcome[data-outcome="refused"] .lp-chip {
+  color: var(--lp-halt);
+}
+
+/* --------------------------------------------------------------------- tamil */
+
+.lp-tamil-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: clamp(2rem, 4vw, 3.5rem);
+  align-items: start;
+}
+
+.lp-shatter {
+  padding: 1.75rem;
+  border: 1px solid var(--lp-rule);
+  background: var(--lp-leaf);
+}
+
+.lp-shatter-title {
+  margin: 0 0 1.75rem;
+  color: var(--lp-muted);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.lp-shatter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: baseline;
+  margin: 0 0 1.25rem;
+}
+
+.lp-shatter-row:last-child {
+  margin-bottom: 0;
+}
+
+.lp-shatter-tag {
+  min-width: 5.5rem;
+  color: var(--lp-measure);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lp-shatter-row[data-broken="true"] .lp-shatter-tag {
+  color: var(--lp-halt);
+}
+
+.lp-tamil-word {
+  font-family: var(--lp-font-tamil), serif;
+  font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+  line-height: 1.4;
+}
+
+.lp-shatter-row[data-broken="true"] .lp-tamil-word {
+  display: flex;
+  gap: 0.5rem;
+  color: var(--lp-halt);
+}
+
+.lp-shatter-row[data-broken="true"] .lp-tamil-word > span {
+  padding: 0 0.3rem;
+  border-bottom: 1px solid currentcolor;
+}
+
+.lp-tamil-prose p {
+  margin: 0 0 1.25rem;
+  color: var(--lp-muted);
+  line-height: 1.7;
+}
+
+.lp-tamil-prose code {
+  padding: 0.1rem 0.3rem;
+  background: var(--lp-leaf);
+  color: var(--lp-ink);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.88em;
+}
+
+.lp-quote-tamil,
+.lp-quote-tanglish {
+  padding-left: 1rem;
+  border-left: 2px solid var(--lp-measure);
+}
+
+.lp-quote-tamil {
+  font-family: var(--lp-font-tamil), serif;
+}
+
+.lp-quote-tanglish {
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.92rem;
+}
+
+/* --------------------------------------------------------------- constraints */
+
+.lp-constraint-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--lp-rule);
+}
+
+.lp-constraint-list li {
+  display: grid;
+  grid-template-columns: minmax(min(100%, 16rem), 0.8fr) minmax(0, 1.4fr);
+  gap: 1rem clamp(1.5rem, 4vw, 4rem);
+  padding: 1.75rem 0;
+  border-bottom: 1px solid var(--lp-rule);
+}
+
+.lp-constraint-refusal {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 500;
+}
+
+.lp-constraint-refusal::before {
+  content: "never ";
+  color: var(--lp-halt);
+  font-family: var(--lp-font-mono), monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lp-constraint-detail {
+  margin: 0;
+  color: var(--lp-muted);
+  font-size: 0.96rem;
+  line-height: 1.65;
+}
+
+/* --------------------------------------------------------------------- close */
+
+.lp-close {
+  padding: clamp(4rem, 9vw, 7rem) 0 clamp(5rem, 10vw, 8rem);
+  border-top: 1px solid var(--lp-rule);
+}
+
+.lp-close-copy {
+  max-width: 48ch;
+  margin: 1.5rem 0 0;
+  color: var(--lp-muted);
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+/* ---------------------------------------------------------------- responsive */
+
+@media (max-width: 900px) {
+  .lp-proof {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "label"
+      "claim"
+      "exhibit"
+      "note";
+    row-gap: 1.75rem;
+  }
+
+  .lp-thesis {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 1.75rem;
+  }
+
+  .lp-thesis > h1 {
+    grid-row: auto;
+  }
+
+  .lp-lede,
+  .lp-thesis > .lp-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .lp-passage {
+    padding: 1.75rem 1.15rem 3.5rem;
+    line-height: 2.3;
+  }
+
+  .lp-provenance {
+    padding: 0.75rem 1.15rem;
+  }
+
+  .lp-constraint-list li {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-span,
+  .lp-span::after,
+  .lp-span-measure {
+    animation: none;
+  }
+
+  .lp-span {
+    background-size: 100% 100%;
+  }
+
+  .lp-span::after {
+    transform: scaleX(1);
+  }
+
+  .lp-span-measure {
+    opacity: 1;
+    transform: none;
   }
 }
