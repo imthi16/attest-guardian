@@ -28,8 +28,11 @@ hooks: ## Install the repository pre-commit hooks.
 dev-api: ## Run the FastAPI development server on port 8000.
 	$(API_BIN)/uvicorn app.main:app --app-dir $(API_DIR) --reload --host 127.0.0.1 --port 8000
 
+# `.venv/bin/python`, not `$(API_BIN)/python`: API_BIN is relative to the repository
+# root and this is the one recipe that changes directory first, so the interpolated
+# path would resolve under apps/api/apps/api and the worker would never start.
 dev-worker: ## Run the document-ingestion worker.
-	cd $(API_DIR) && $(API_BIN)/python -m app.ingestion.worker
+	cd $(API_DIR) && .venv/bin/python -m app.ingestion.worker
 
 dev-web: ## Run the Next.js development server on port 3000.
 	npm --prefix $(WEB_DIR) run dev

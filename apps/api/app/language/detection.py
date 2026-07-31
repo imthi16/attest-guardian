@@ -58,6 +58,40 @@ _TANGLISH_MARKERS = frozenset(
         "theriyuma",
         "theriyum",
         "namba",
+        # Content words, not conversational ones. Classification needs only a
+        # *single* marker — 0.4 separates a confident Tanglish reading from an
+        # ambiguous one, it is not the bar for being Tanglish at all — but the
+        # lexicon held nothing but chat, so a question made of domain vocabulary
+        # ("eettiya viduppu maathamum") matched zero markers, fell to the
+        # English branch, and was never transliterated. One word short of the
+        # feature working.
+        #
+        # The workaround before these existed was to pad a question with "enna"
+        # or "irukku" to get it recognised, and that made it worse rather than
+        # better: those words appear in no formal document, so they diluted the
+        # verifier's query-overlap confidence below its floor and the answer was
+        # dropped as weakly connected. Recognising the words a question is
+        # actually about is what removes both problems at once.
+        #
+        # Every entry is a romanization with no English homograph. One marker is
+        # enough to classify, so a single accidental hit would misread an
+        # English query as Tanglish.
+        "aandu",
+        "eettiya",
+        "ethanai",
+        "kolgai",
+        "maatham",
+        "maathamum",
+        "maruthuva",
+        "naal",
+        "naatkal",
+        "oozhiyar",
+        "ovvoru",
+        "sambalam",
+        "uuzhiyar",
+        "vidupu",
+        "viduppu",
+        "vivaram",
     }
 )
 

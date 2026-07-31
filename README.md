@@ -75,6 +75,16 @@ flowchart TB
 Full detail, and the reasoning behind each decision, is in
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
+### What a checkable answer looks like
+
+![The evidence panel showing travel-expense-policy.pdf, version 1, page 1, characters 139-215, with the proven passage highlighted.](./docs/screenshots/05-evidence-panel.png)
+
+`Page 1, characters 139–215` is the citation's range. The highlighted text was **read back from the
+stored document at those offsets** when the panel was opened — it is not the quote the answer
+supplied, and a quote that failed to match would render a failure here instead of a passage. More
+captures, and what each one does and does not establish, are in
+[`docs/screenshots/`](./docs/screenshots/README.md).
+
 ## What is implemented
 
 Everything below runs today and is covered by tests; nothing in this table is aspirational. The

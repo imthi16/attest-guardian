@@ -7,7 +7,10 @@
       "text": "invoice payment due date",
       "language": "eng",
       "answerable": true,
-      "relevance": { "alpha-invoice-terms": 2, "alpha-late-penalty": 1 },
+      "relevance": {
+        "alpha-invoice-terms": 2,
+        "alpha-late-penalty": 1
+      },
       "expected_quote": "thirty days",
       "note": "English, born-digital, single clear answer"
     },
@@ -16,7 +19,10 @@
       "text": "payment penalty varum",
       "language": "tanglish",
       "answerable": true,
-      "relevance": { "alpha-late-penalty": 2, "alpha-invoice-terms": 1 },
+      "relevance": {
+        "alpha-late-penalty": 2,
+        "alpha-invoice-terms": 1
+      },
       "expected_quote": "penalty",
       "note": "Tanglish query against a Tanglish passage"
     },
@@ -25,7 +31,10 @@
       "text": "thirty days la payment pannanum",
       "language": "tanglish",
       "answerable": true,
-      "relevance": { "alpha-late-penalty": 2, "alpha-invoice-terms": 1 },
+      "relevance": {
+        "alpha-late-penalty": 2,
+        "alpha-invoice-terms": 1
+      },
       "expected_quote": "thirty days",
       "note": "Tanglish query whose answer also exists in English"
     },
@@ -34,7 +43,9 @@
       "text": "refund processing time business days",
       "language": "eng",
       "answerable": true,
-      "relevance": { "alpha-refunds": 2 },
+      "relevance": {
+        "alpha-refunds": 2
+      },
       "expected_quote": "five business days",
       "note": "English, one supporting passage only"
     },
@@ -43,7 +54,10 @@
       "text": "annual leave carries over",
       "language": "eng",
       "answerable": true,
-      "relevance": { "alpha-leave-accrual": 2, "alpha-leave-accrual-tamil": 1 },
+      "relevance": {
+        "alpha-leave-accrual": 2,
+        "alpha-leave-accrual-tamil": 1
+      },
       "expected_quote": "carries over",
       "note": "English question whose topic also appears in Tamil"
     },
@@ -52,7 +66,10 @@
       "text": "விடுப்பு ஒவ்வொரு மாதமும் சேர்க்கப்படும்",
       "language": "tam",
       "answerable": true,
-      "relevance": { "alpha-leave-accrual-tamil": 2, "alpha-leave-accrual": 1 },
+      "relevance": {
+        "alpha-leave-accrual-tamil": 2,
+        "alpha-leave-accrual": 1
+      },
       "expected_quote": "விடுப்பு",
       "note": "Tamil question against a Tamil passage"
     },
@@ -61,7 +78,9 @@
       "text": "ஒப்பந்தம் முடிவடைகிறது மார்ச்",
       "language": "tam",
       "answerable": true,
-      "relevance": { "alpha-contract-end-tamil": 2 },
+      "relevance": {
+        "alpha-contract-end-tamil": 2
+      },
       "expected_quote": "மார்ச்",
       "note": "Tamil question about a contract term"
     },
@@ -70,7 +89,9 @@
       "text": "terminate agreement written notice",
       "language": "eng",
       "answerable": true,
-      "relevance": { "alpha-notice-period": 2 },
+      "relevance": {
+        "alpha-notice-period": 2
+      },
       "expected_quote": "ninety days",
       "note": "English; a near-identical passage exists in another workspace with a different figure"
     },
@@ -79,7 +100,9 @@
       "text": "warranty manufacturing defects months",
       "language": "eng",
       "answerable": true,
-      "relevance": { "alpha-warranty-scanned": 2 },
+      "relevance": {
+        "alpha-warranty-scanned": 2
+      },
       "expected_quote": "twenty-four months",
       "note": "Scanned page read with high OCR confidence"
     },
@@ -88,7 +111,9 @@
       "text": "shipping charges refundable",
       "language": "eng",
       "answerable": true,
-      "relevance": { "alpha-total-scanned": 2 },
+      "relevance": {
+        "alpha-total-scanned": 2
+      },
       "expected_quote": "not refundable",
       "note": "Scanned page read with low OCR confidence; the answer must be no more certain than the reading"
     },
@@ -97,7 +122,9 @@
       "text": "பழுது பார்க்கும் சேவை",
       "language": "tam",
       "answerable": true,
-      "relevance": { "alpha-support-scanned-tamil": 2 },
+      "relevance": {
+        "alpha-support-scanned-tamil": 2
+      },
       "expected_quote": "சேவை",
       "note": "Scanned Tamil page whose engine recorded no confidence at all"
     },
@@ -124,7 +151,9 @@
       "text": "what is the training budget for the marketing team",
       "language": "eng",
       "answerable": false,
-      "relevance": { "alpha-training-mention": 1 },
+      "relevance": {
+        "alpha-training-mention": 1
+      },
       "expected_quote": null,
       "note": "Related material exists but does not answer the question: the hard abstention case, where retrieval succeeds and the answer must still be withheld"
     },
@@ -142,7 +171,9 @@
       "text": "விடுப்பு ரத்து செய்தால் என்ன நடக்கும்",
       "language": "tam",
       "answerable": false,
-      "relevance": { "alpha-leave-accrual-tamil": 1 },
+      "relevance": {
+        "alpha-leave-accrual-tamil": 1
+      },
       "expected_quote": null,
       "note": "Tamil question whose topic is covered but whose answer is not: the hard abstention case in Tamil script"
     },
@@ -160,9 +191,22 @@
       "text": "payment late aana account close pannuvangala",
       "language": "tanglish",
       "answerable": false,
-      "relevance": { "alpha-late-penalty": 1 },
+      "relevance": {
+        "alpha-late-penalty": 1
+      },
       "expected_quote": null,
       "note": "Tanglish question about a covered topic with an uncovered answer: the hard abstention case in Latin script"
+    },
+    {
+      "query_id": "q-leave-accrual-tanglish-to-tamil",
+      "text": "enna viduppu irukku maathamum",
+      "language": "tanglish",
+      "answerable": true,
+      "relevance": {
+        "alpha-leave-accrual-tamil": 2
+      },
+      "expected_quote": "விடுப்பு",
+      "note": "Tanglish query against a TAMIL-SCRIPT passage - the cross-script case the transliterator exists for, and the only query here that fails if it stops producing matchable Tamil. The conversational padding is not decoration: detection needs 40% of a Latin query's words in its marker lexicon, so a query of pure domain vocabulary is read as English and never transliterated."
     }
   ]
 }

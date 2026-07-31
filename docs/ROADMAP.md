@@ -66,6 +66,23 @@ leave the deployment.
 
 ### Answer quality
 
+- **Tanglish support is fixed but shallow.** A romanized question now reaches Tamil-script
+  documents and answers from them. Four separate faults had to be corrected: the transliterator
+  emitted independent vowel letters where Tamil requires dependent signs (`vidupu` produced
+  `வ்இட்உப்உ` rather than `விடுபு`); detection recognised only conversational
+  Tanglish, so domain vocabulary was classified English and never transliterated; reranking and
+  the RAG graph both scored the *original* query against candidates, so a Tanglish question
+  scored zero against the Tamil passages retrieval had correctly found.
+
+  What remains shallow is the mapping itself. It is rule-based and approximate — it does not
+  distinguish ந/ன/ண or ல/ள/ழ, so `naal` yields `னால்` where Tamil writes `நாள்` — and detection
+  is a word list rather than a model. **A single recognised marker is enough** to classify a Latin
+  query as Tanglish (the 0.4 ratio only separates a confident reading from an ambiguous one), so
+  the failure mode is narrow but absolute: a question containing *no* listed word falls to the
+  English branch and is never transliterated at all. The lexicon is now 47 words. Both the
+  transliterator and the detector sit behind their protocols, and are the natural place for a
+  statistical model.
+
 - **Abstention recall is 0.86.** One of seven unanswerable questions is answered from a passage that
   mentions the topic without addressing it. Left failing deliberately; no threshold fixes it, and
   it needs semantic rather than lexical matching. [`EVALUATION.md`](./EVALUATION.md#known-limitations)
@@ -91,6 +108,24 @@ Each of these is described where it is owned; this is the index.
 | Secrets are environment variables, visible to anyone who can `docker inspect` the host | [`DEPLOYMENT.md`](./DEPLOYMENT.md#known-gaps) |
 | No zero-downtime deploy — `up -d` replaces containers | [`DEPLOYMENT.md`](./DEPLOYMENT.md#known-gaps) |
 | The backup and restore scripts have not been run against a real deployment | [`DEPLOYMENT.md`](./DEPLOYMENT.md#known-gaps) |
+| A **revoked** session cannot be cleared from a page render, so the browser bounces between `/login` and the workspace forever | below |
+
+#### A revoked session traps the browser
+
+Found by hitting it. `clearSession()` writes through `tryWriteCookies`, which swallows the failure
+Next.js raises when a Server Component tries to mutate cookies. That is deliberate for token
+*rotation* — the comment explains that a stale access cookie simply triggers another rotation on the
+next request, which is true.
+
+It does not hold for **revocation**. When the refresh token has been revoked — which happens by
+design the moment a rotated token is replayed — there is no next successful request. The cookies are
+never removed, the middleware keeps seeing a refresh cookie and redirects `/login` to the workspace,
+the workspace fails authorization and redirects back to `/login?expired=1`, and the user cannot sign
+in again without clearing cookies by hand.
+
+The fix is that the expired path must clear cookies somewhere allowed to write them — middleware or
+a route handler — rather than from a render. Not fixed here: it is unrelated to the change this
+branch carries, and it deserves its own diff and its own regression test.
 
 ### Observability
 

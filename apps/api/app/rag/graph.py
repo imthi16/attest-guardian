@@ -28,7 +28,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.decision import ConfidencePolicy, DecisionOutcome, DecisionSignals, get_default_policy
-from app.language import detect_language
+from app.language import get_default_query_processor, match_tokens
 from app.rag.config import RagConfig
 from app.rag.generation import AnswerGenerator, get_default_generator
 from app.rag.state import RagState
@@ -177,10 +177,21 @@ class RagGraph:
 
     @staticmethod
     async def _analyze(state: RagState) -> dict[str, object]:
-        """Detect the query language, preserving the user's exact query text."""
-        detection = detect_language(state.query)
-        state.trace.detected_language = detection.language.value
-        return {"detected_language": detection.language.value, "trace": state.trace}
+        """Analyse the query, preserving the user's exact query text.
+
+        Runs the full processor rather than bare detection, so the Tamil-script
+        rendering of a Tanglish question is available to every node downstream
+        and not just to retrieval. `state.query` is untouched: it is what the
+        user typed and what provenance records.
+        """
+        processed = get_default_query_processor().process(state.query)
+        language = processed.detection.language.value
+        state.trace.detected_language = language
+        return {
+            "detected_language": language,
+            "search_variants": tuple(processed.search_variants),
+            "trace": state.trace,
+        }
 
     async def _retrieve(self, state: RagState) -> dict[str, object]:
         """Fetch authorized evidence and apply the sufficiency gate."""
@@ -215,10 +226,38 @@ class RagGraph:
             "trace": trace,
         }
 
+    @staticmethod
+    def _matching_query(state: RagState) -> str:
+        """The form of the question that shares a script with the evidence.
+
+        Retrieval searches every variant, so a Tanglish question can legitimately
+        return a Tamil-script passage. Generation and verification then score
+        query-against-passage, and the romanized form shares *no* tokens with
+        Tamil script — the claim would be dropped as unsupported immediately
+        after retrieval had correctly found the passage that answers it. So the
+        variant with the most tokens in common with the retrieved evidence is
+        used for scoring.
+
+        Ties fall back to `state.query`: for English and Tamil questions every
+        variant is the same string, and this reduces to today's behaviour rather
+        than quietly rewriting the question those pipelines are scored on.
+        """
+        if len(state.search_variants) <= 1 or not state.evidence:
+            return state.query
+        evidence_tokens: set[str] = set()
+        for passage in state.evidence:
+            evidence_tokens |= match_tokens(passage.content)
+        best, best_score = state.query, len(match_tokens(state.query) & evidence_tokens)
+        for variant in state.search_variants:
+            score = len(match_tokens(variant) & evidence_tokens)
+            if score > best_score:
+                best, best_score = variant, score
+        return best
+
     async def _generate(self, state: RagState) -> dict[str, object]:
         """Propose candidate claims from the minimal evidence set."""
         start = time.perf_counter()
-        candidates = tuple(self._generator.generate(state.query, state.evidence))
+        candidates = tuple(self._generator.generate(self._matching_query(state), state.evidence))
         state.trace.generation_ms = (time.perf_counter() - start) * 1000
         state.trace.generator = self._generator.model
         state.trace.draft_claim_count = len(candidates)
@@ -227,7 +266,9 @@ class RagGraph:
     async def _verify(self, state: RagState) -> dict[str, object]:
         """Verify each candidate against its cited evidence; drop unsupported."""
         start = time.perf_counter()
-        outcome = self._verifier.verify_verbose(state.query, state.candidates, state.evidence)
+        outcome = self._verifier.verify_verbose(
+            self._matching_query(state), state.candidates, state.evidence
+        )
         claims = tuple(outcome.claims)
         counts = outcome.counts
         trace = state.trace
